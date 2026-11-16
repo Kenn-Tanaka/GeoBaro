@@ -1,0 +1,11 @@
+#include <windows.h>
+
+// PerMonitorV2 DPI Awareness および Common Controls v6 マニフェストを有効化
+#define wxUSE_DPI_AWARE_MANIFEST 2
+
+// アプリケーションアイコン (wxWidgetsの標準およびWindowsエクスプローラー用)
+// wx/msw/wx.rc より前に定義することで、アプリ独自アイコンを優先させる
+1 ICON "icons/app_icon.ico"
+app_icon ICON "icons/app_icon.ico"
+
+#include "wx/msw/wx.rc"

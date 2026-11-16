@@ -1,0 +1,14 @@
+# User preset data (contains user-registered locations)
+presets.dat
+
+# Compiled executables and build intermediates
+*.exe
+*.o
+*.obj
+*.map
+*.log
+*.tmp
+
+# Python cache
+__pycache__/
+*.py[cod]
