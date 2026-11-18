@@ -49,7 +49,7 @@ private:
         double base_lon = 0.0;
         bool is_fine_tuned = false;
         bool is_reset = false;
-        bool from_preset = false;
+        std::string preset_name;
 
         int year = 0;
         int month = 0;
@@ -90,7 +90,7 @@ private:
         double base_lon = 0.0;
         bool is_fine_tuned = false;
         bool is_reset = false;
-        bool from_preset = false;
+        std::string preset_name;
     };
 
     void InitUi();
@@ -160,13 +160,15 @@ private:
     void ClearWeatherSummaryUi();
     void SetExportControlsEnabled(bool enabled);
     bool SyncHeightAglIfNeeded();
+    std::string BuildCsv() const;
     wxString BuildListRowTsv(long row) const;
     bool CopyTextToClipboard(const wxString& text, const wxString& statusMessage);
 
     wxString GetPresetFilePath() const;
     const PresetLocation* GetSelectedPreset() const;
     void LoadPresets();
-    void SavePresets() const;
+    bool SavePresets(std::vector<PresetLocation> updated);
+    void RestoreDisplayedInputs();
     void RefreshPresetChoice(int select_preset_index = -1);
 
     // プリセットコントロール
@@ -213,6 +215,7 @@ private:
     LocationInfo m_lastLoc;
     JmaDailyResult m_lastJma;
     double m_lastHeightAgl = 0.0;
+    std::string m_lastPresetName;
 
     std::string m_baseInputText;
     std::string m_baseAddress;

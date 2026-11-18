@@ -5,8 +5,9 @@ CXXFLAGS = -O2 -std=c++17 -D_UNICODE -DUNICODE -D__WXMSW__ -mthreads -Wall -fmac
 
 # wxWidgets インストールディレクトリ (環境変数または引数 WX_DIR で指定)
 WX_DIR ?= C:/path/to/wxWidgets-3.2.6
-WX_INC = -I$(WX_DIR)/include -I$(WX_DIR)/lib/gcc_lib/mswu
-WX_LIB_DIR = -L$(WX_DIR)/lib/gcc_lib
+WX_LIB_ROOT ?= $(WX_DIR)/lib/gcc_lib
+WX_INC = -I$(WX_DIR)/include -I$(WX_LIB_ROOT)/mswu
+WX_LIB_DIR = -L$(WX_LIB_ROOT)
 
 # wxWidgets静的ライブラリ (core, base, adv, net, PNG画像コーデック等)
 # MIT互換かつ軽量化のため TIFF/JPEG は除外し、PNG (+標準BMP) のみリンクする
@@ -14,14 +15,16 @@ WX_LIBS = -lwxmsw32u_adv -lwxmsw32u_core -lwxbase32u_net -lwxbase32u \
           -lwxpng -lwxzlib -lwxregexu -lwxexpat
 
 # Windows標準ライブラリ
-WIN_LIBS = -lwininet -lgdiplus -lcomctl32 -lole32 -luuid -lshlwapi -lversion -lws2_32 -loleaut32 -luxtheme -loleacc -lwinspool
+WIN_LIBS = -lwininet -lgdiplus -lcomctl32 -lole32 -luuid -lrpcrt4 -lshlwapi -lversion -lws2_32 -loleaut32 -luxtheme -loleacc -lwinspool -lwinmm
 
 # 静的リンクフラグ (単一EXE生成)
 STATIC_FLAGS = -static -static-libgcc -static-libstdc++ -mwindows
 
 CORE_SRCS = src/gsi_service.cpp \
+            src/jst_clock.cpp \
             src/jma_service.cpp \
             src/jma_stations.cpp \
+            src/station_history.cpp \
             src/spatial_pressure.cpp \
             src/http_transport.cpp \
             src/preset_store.cpp
@@ -50,8 +53,8 @@ CLI_TARGET = test_cli.exe
 
 all: $(TARGET)
 
-$(RES_OBJ): $(RC_SRC) icons/app_icon.ico Makefile
-	windres -i $(RC_SRC) -o $(RES_OBJ) --include-dir=. -I$(WX_DIR)/lib/gcc_lib/mswu -I$(WX_DIR)/include
+$(RES_OBJ): $(RC_SRC) icons/GeoBaro.ico Makefile
+	windres -i $(RC_SRC) -o $(RES_OBJ) --include-dir=. -I$(WX_LIB_ROOT)/mswu -I$(WX_DIR)/include
 
 $(TARGET): $(GUI_SRCS) $(GUI_HDRS) $(RES_OBJ)
 	$(CXX) $(CXXFLAGS) $(WX_INC) $(GUI_SRCS) $(RES_OBJ) -o $(TARGET) $(WX_LIB_DIR) $(WX_LIBS) $(WIN_LIBS) $(STATIC_FLAGS)
@@ -60,5 +63,9 @@ $(TARGET): $(GUI_SRCS) $(GUI_HDRS) $(RES_OBJ)
 $(CLI_TARGET): src/test_cli.cpp $(CORE_SRCS) $(CORE_HDRS)
 	$(CXX) -O2 -std=c++17 -Wall src/test_cli.cpp $(CORE_SRCS) -o $(CLI_TARGET) -lwininet -static -static-libgcc -static-libstdc++
 
+OFFLINE_SRCS = tests/test_offline.cpp src/jma_service.cpp src/jma_stations.cpp src/station_history.cpp src/spatial_pressure.cpp src/preset_store.cpp
+test_offline.exe: $(OFFLINE_SRCS) $(CORE_HDRS)
+	$(CXX) -O2 -std=c++17 -Wall $(OFFLINE_SRCS) -o $@ -static
+
 clean:
-	del /f /q $(TARGET) $(CLI_TARGET) src\resource.o
+	del /f /q $(TARGET) $(CLI_TARGET) test_offline.exe src\resource.o

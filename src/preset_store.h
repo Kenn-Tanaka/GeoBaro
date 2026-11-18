@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <filesystem>
 
 struct PresetLocation {
     std::string name;
@@ -19,6 +20,7 @@ class PresetStore {
 public:
     static std::string Serialize(const std::vector<PresetLocation>& presets);
     static std::vector<PresetLocation> Deserialize(const std::string& content);
+    static bool Save(const std::filesystem::path& path, const std::vector<PresetLocation>& presets);
     static void Upsert(std::vector<PresetLocation>& presets, const PresetLocation& item);
     static bool RemoveByIndex(std::vector<PresetLocation>& presets, size_t index);
 };

@@ -22,6 +22,7 @@ struct SimpleDate {
     int year = 0;
     int month = 0;
     int day = 0;
+    int Key() const { return year * 10000 + month * 100 + day; }
 };
 
 int CompareDate(SimpleDate a, SimpleDate b) {
@@ -47,19 +48,9 @@ bool DateToFileTimeNoon(SimpleDate d, ULONGLONG& out_ft) {
 }
 
 SimpleDate GetJstTodayInternal() {
-    SYSTEMTIME utc{};
-    GetSystemTime(&utc);
-    FILETIME ft{};
-    SystemTimeToFileTime(&utc, &ft);
-    ULARGE_INTEGER uli;
-    uli.LowPart = ft.dwLowDateTime;
-    uli.HighPart = ft.dwHighDateTime;
-    uli.QuadPart += 9ULL * 3600ULL * 10000000ULL;
-    ft.dwLowDateTime = uli.LowPart;
-    ft.dwHighDateTime = uli.HighPart;
-    SYSTEMTIME jst{};
-    FileTimeToSystemTime(&ft, &jst);
-    return SimpleDate{jst.wYear, jst.wMonth, jst.wDay};
+    SimpleDate today;
+    JmaService::GetCurrentJstDate(today.year, today.month, today.day);
+    return today;
 }
 
 SimpleDate AddDays(SimpleDate d, int delta_days) {
@@ -84,9 +75,10 @@ int DaysBetween(SimpleDate from, SimpleDate to) {
     return static_cast<int>(diff / (86400LL * 10000000LL));
 }
 
-bool HasAmedasPressure(const JmaStation& stn) {
-    // 富士山 (50066) は防災情報 AMeDAS JSON に現地気圧・海面気圧が含まれない
-    return std::strcmp(stn.amedas_id, "50066") != 0;
+bool TryAmedasForPastDay(SimpleDate target, SimpleDate today,
+                         const std::function<bool()>& should_cancel) {
+    int age = DaysBetween(target, today);
+    return age >= 1 && age <= 9 && !(should_cancel && should_cancel());
 }
 
 std::string FormatDateYmd(SimpleDate d) {
@@ -384,13 +376,6 @@ bool ParseTimestampHourMin(const std::string& ts14, int& out_h, int& out_m) {
 
 } // namespace
 
-void JmaService::GetCurrentJstDate(int& out_year, int& out_month, int& out_day) {
-    SimpleDate d = GetJstTodayInternal();
-    out_year = d.year;
-    out_month = d.month;
-    out_day = d.day;
-}
-
 bool JmaService::IsRealtimeDateCandidate(int year, int month, int day) {
     SimpleDate target{year, month, day};
     return CompareDate(target, GetJstTodayInternal()) >= 0;
@@ -413,7 +398,7 @@ double JmaService::CalculateDistanceKm(double lat1, double lon1, double lat2, do
 }
 
 static double CalculateStationSelectionScore(double dist_km, double ground_elev_m, double station_alt_m) {
-    if (!std::isfinite(ground_elev_m) || ground_elev_m <= -9000.0) {
+    if (!std::isfinite(ground_elev_m) || !std::isfinite(station_alt_m) || ground_elev_m <= -9000.0) {
         return dist_km;
     }
     // 標高差 50m あたり水平距離 1km 相当のペナルティを加算して山岳官署と平地のミスマッチを防ぐ
@@ -424,7 +409,7 @@ static double CalculateStationSelectionScore(double dist_km, double ground_elev_
 std::vector<std::pair<JmaStation, double>> JmaService::FindStationsSortedByDistance(
     double lat, double lon,
     bool require_amedas_pressure,
-    double ground_elev_m
+    double ground_elev_m, int date
 ) {
     struct StationCandidate {
         JmaStation stn;
@@ -432,14 +417,12 @@ std::vector<std::pair<JmaStation, double>> JmaService::FindStationsSortedByDista
         double score;
     };
     std::vector<StationCandidate> candidates;
-    candidates.reserve(154);
-    for (int i = 0; i < 154; ++i) {
-        if (require_amedas_pressure && !HasAmedasPressure(G_JMA_STATIONS[i])) {
-            continue;
-        }
-        double d = CalculateDistanceKm(lat, lon, G_JMA_STATIONS[i].lat, G_JMA_STATIONS[i].lon);
-        double score = CalculateStationSelectionScore(d, ground_elev_m, G_JMA_STATIONS[i].alt);
-        candidates.push_back(StationCandidate{G_JMA_STATIONS[i], d, score});
+    candidates.reserve(G_JMA_STATIONS.size());
+    for (const auto& entry : G_JMA_STATIONS) {
+        JmaStation stn;
+        if ((require_amedas_pressure && !entry.amedas_pressure) || !entry.AtTime(date, 1200, stn)) continue;
+        double d = CalculateDistanceKm(lat, lon, stn.lat, stn.lon);
+        candidates.push_back({stn, d, CalculateStationSelectionScore(d, ground_elev_m, stn.alt)});
     }
     std::sort(candidates.begin(), candidates.end(), [](const StationCandidate& a, const StationCandidate& b) {
         return a.score < b.score;
@@ -456,26 +439,11 @@ JmaStation JmaService::FindNearestStation(
     double lat, double lon,
     double& out_distance_km,
     bool require_amedas_pressure,
-    double ground_elev_m
+    double ground_elev_m, int date
 ) {
-    int best_idx = 0;
-    double best_score = 1e18;
-    double best_dist = 1e9;
-
-    for (int i = 0; i < 154; ++i) {
-        if (require_amedas_pressure && !HasAmedasPressure(G_JMA_STATIONS[i])) {
-            continue;
-        }
-        double d = CalculateDistanceKm(lat, lon, G_JMA_STATIONS[i].lat, G_JMA_STATIONS[i].lon);
-        double score = CalculateStationSelectionScore(d, ground_elev_m, G_JMA_STATIONS[i].alt);
-        if (score < best_score) {
-            best_score = score;
-            best_dist = d;
-            best_idx = i;
-        }
-    }
-    out_distance_km = best_dist;
-    return G_JMA_STATIONS[best_idx];
+    auto ranked = FindStationsSortedByDistance(lat, lon, require_amedas_pressure, ground_elev_m, date);
+    out_distance_km = ranked.empty() ? 0.0 : ranked.front().second;
+    return ranked.empty() ? JmaStation{} : ranked.front().first;
 }
 
 double JmaService::CalculatePressureFromSeaLevel(double sea_press, double sea_temp_c, double target_elevation_m) {
@@ -745,7 +713,6 @@ JmaDailyResult ParseHourlyS1Html(
 JmaDailyResult FetchHourlyS1Internal(
     const JmaStation& station,
     int year, int month, int day,
-    bool& out_got_html,
     const std::function<bool()>& should_cancel = nullptr
 ) {
     JmaDailyResult result;
@@ -753,7 +720,6 @@ JmaDailyResult FetchHourlyS1Internal(
     result.year = year;
     result.month = month;
     result.day = day;
-    out_got_html = false;
 
     if (should_cancel && should_cancel()) {
         result.error_message = "照会がキャンセルされました。";
@@ -770,7 +736,6 @@ JmaDailyResult FetchHourlyS1Internal(
         result.error_message = "気象庁の過去データ取得に失敗しました (通信エラーまたは接続拒否)。";
         return result;
     }
-    out_got_html = true;
 
     return ParseHourlyS1Html(html, station, year, month, day);
 }
@@ -957,23 +922,20 @@ JmaDailyResult FetchAmedasPointForDateInternal(
     return result;
 }
 
-std::vector<JmaStation> FindSpatialCandidateStations(double lat, double lon, size_t max_count) {
+std::vector<JmaStation> FindSpatialCandidateStations(double lat, double lon, size_t max_count, int date, bool realtime) {
     struct Ranked {
         JmaStation stn;
         double dist_km;
     };
     std::vector<Ranked> list;
-    list.reserve(154);
-    for (int i = 0; i < 154; ++i) {
-        if (!HasAmedasPressure(G_JMA_STATIONS[i])) {
-            continue;
-        }
+    list.reserve(G_JMA_STATIONS.size());
+    for (const auto& entry : G_JMA_STATIONS) {
+        JmaStation stn;
+        if ((realtime && !entry.amedas_pressure) || !entry.AtTime(date, 1200, stn)) continue;
         double x = 0.0, y = 0.0, d = 0.0;
-        SpatialPressureCalculator::CalculateLocalCoordsKm(
-            lat, lon, G_JMA_STATIONS[i].lat, G_JMA_STATIONS[i].lon, x, y, d
-        );
+        SpatialPressureCalculator::CalculateLocalCoordsKm(lat, lon, stn.lat, stn.lon, x, y, d);
         if (std::isfinite(d) && d <= SpatialPressureCalculator::kDefaultMaxRadiusKm) {
-            list.push_back(Ranked{G_JMA_STATIONS[i], d});
+            list.push_back({stn, d});
         }
     }
     std::sort(list.begin(), list.end(), [](const Ranked& a, const Ranked& b) {
@@ -1030,20 +992,19 @@ void PopulateSpatialNeighborsInternal(
     res.has_target_coords = true;
     res.neighbor_series.clear();
 
-    if (!res.success || res.hours.empty()) {
+    // 1960年12月31日の24時から、履歴に基づく観測所座標を利用できる。
+    if (!res.success || res.hours.empty() || SimpleDate{res.year, res.month, res.day}.Key() < 19601231) {
         return;
     }
 
-    if (HasAmedasPressure(res.station)) {
-        res.neighbor_series.push_back(BuildSeriesFromHours(res.station, res.hours));
-    }
+    res.neighbor_series.push_back(BuildSeriesFromHours(res.station, res.hours));
 
-    std::vector<JmaStation> candidates = FindSpatialCandidateStations(lat, lon, kMaxSpatialFetchStations);
+    std::vector<JmaStation> candidates = FindSpatialCandidateStations(lat, lon, kMaxSpatialFetchStations,
+        SimpleDate{res.year, res.month, res.day}.Key(), res.is_realtime);
     std::vector<JmaStation> to_fetch;
     to_fetch.reserve(candidates.size());
     for (const auto& stn : candidates) {
-        if (HasAmedasPressure(res.station) &&
-            std::strcmp(stn.amedas_id, res.station.amedas_id) == 0) {
+        if (std::strcmp(stn.block_no, res.station.block_no) == 0) {
             continue;
         }
         to_fetch.push_back(stn);
@@ -1134,13 +1095,20 @@ void PopulateSpatialNeighborsInternal(
 } // namespace
 
 JmaDailyResult JmaService::FetchDailyWeather(
-    const JmaStation& station,
+    const JmaStation& requested_station,
     int year, int month, int day,
     double target_elevation_m,
     const std::function<bool()>& should_cancel
 ) {
     SimpleDate target{year, month, day};
     SimpleDate jst_today = GetJstTodayInternal();
+
+    JmaStation station;
+    if (!requested_station.AtTime(target.Key(), 1200, station)) {
+        JmaDailyResult err;
+        err.error_message = "指定日にこの官署の地点情報がありません。";
+        return err;
+    }
 
     if (CompareDate(target, jst_today) >= 0) {
         SimpleDate latest_date{};
@@ -1177,6 +1145,15 @@ JmaDailyResult JmaService::FetchDailyWeather(
             return err;
         }
         if (cmp == 0) {
+            if (!station.amedas_pressure) {
+                JmaDailyResult err;
+                err.station = station;
+                err.year = year;
+                err.month = month;
+                err.day = day;
+                err.error_message = "この官署ではAMeDASの気圧を取得できません。";
+                return err;
+            }
             bool has_press = false;
             bool has_recent_press = false;
             JmaDailyResult res = FetchAmedasPointForDateInternal(
@@ -1189,9 +1166,8 @@ JmaDailyResult JmaService::FetchDailyWeather(
         }
     }
 
-    bool got_html = false;
-    JmaDailyResult res = FetchHourlyS1Internal(station, year, month, day, got_html, should_cancel);
-    if (!res.success && got_html && DaysBetween(target, jst_today) <= 9) {
+    JmaDailyResult res = FetchHourlyS1Internal(station, year, month, day, should_cancel);
+    if (!res.success && station.amedas_pressure && TryAmedasForPastDay(target, jst_today, should_cancel)) {
         SimpleDate latest_date{};
         int latest_h = 0, latest_m = 0;
         if (FetchLatestAmedasTime(latest_date, latest_h, latest_m, should_cancel) &&
@@ -1203,6 +1179,10 @@ JmaDailyResult JmaService::FetchDailyWeather(
                 station, target, latest_date, latest_h, latest_m,
                 CompareDate(target, latest_date) < 0, should_cancel, has_press, has_recent_press
             );
+            if (res.success && !has_press) {
+                res.success = false;
+                res.error_message = "指定日のAMeDAS気圧データが欠測しています。";
+            }
         }
     }
 
@@ -1247,8 +1227,8 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
 
     auto run_amedas_with_fallback = [&](SimpleDate latest_date, int latest_h, int latest_m, bool past_day_mode) -> JmaDailyResult {
         double nearest_all_dist = 0.0;
-        JmaStation nearest_all = FindNearestStation(lat, lon, nearest_all_dist, false, effective_ground_elev);
-        auto candidates = FindStationsSortedByDistance(lat, lon, true, effective_ground_elev);
+        JmaStation nearest_all = FindNearestStation(lat, lon, nearest_all_dist, false, effective_ground_elev, target.Key());
+        auto candidates = FindStationsSortedByDistance(lat, lon, true, effective_ground_elev, target.Key());
         JmaDailyResult last_err;
         JmaDailyResult soft_fallback;
         bool has_soft_fallback = false;
@@ -1323,12 +1303,16 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
     }
 
     double dist = 0.0;
-    JmaStation stn = FindNearestStation(lat, lon, dist, false, effective_ground_elev);
-    bool got_html = false;
-    JmaDailyResult res = FetchHourlyS1Internal(stn, year, month, day, got_html, should_cancel);
+    JmaStation stn = FindNearestStation(lat, lon, dist, false, effective_ground_elev, target.Key());
+    if (!*stn.block_no) {
+        JmaDailyResult err;
+        err.error_message = "指定日に利用できる観測所がありません。";
+        return err;
+    }
+    JmaDailyResult res = FetchHourlyS1Internal(stn, year, month, day, should_cancel);
     res.distance_km = dist;
 
-    if (!res.success && got_html && DaysBetween(target, jst_today) <= 9) {
+    if (!res.success && TryAmedasForPastDay(target, jst_today, should_cancel)) {
         SimpleDate latest_date{};
         int latest_h = 0, latest_m = 0;
         if (FetchLatestAmedasTime(latest_date, latest_h, latest_m, should_cancel) &&
@@ -1349,11 +1333,12 @@ bool JmaService::CanReuseNeighborDataForLocation(
     if (!prev.success || prev.hours.empty() || !prev.has_target_coords) {
         return false;
     }
-    std::vector<JmaStation> new_candidates = FindSpatialCandidateStations(new_lat, new_lon, kMaxSpatialFetchStations);
+    std::vector<JmaStation> new_candidates = FindSpatialCandidateStations(new_lat, new_lon, kMaxSpatialFetchStations,
+        SimpleDate{prev.year, prev.month, prev.day}.Key(), prev.is_realtime);
     for (const auto& c : new_candidates) {
         bool found = false;
         for (const auto& ns : prev.neighbor_series) {
-            if (std::strcmp(c.amedas_id, ns.station.amedas_id) == 0) {
+            if (std::strcmp(c.block_no, ns.station.block_no) == 0) {
                 found = true;
                 break;
             }
@@ -1418,11 +1403,17 @@ void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elev
     std::vector<SpatialStationInput> spatial_inputs;
     spatial_inputs.reserve(result.neighbor_series.size());
 
+    SimpleDate date{result.year, result.month, result.day};
+    const int next_date = AddDays(date, 1).Key();
     for (size_t i = 0; i < n; ++i) {
         auto& hw = result.hours[i];
+        const int obs_date = hw.hour == 24 ? next_date : date.Key();
+        const int hhmm = hw.hour % 24 * 100 + hw.minute;
+        JmaStation station;
+        const bool active = result.station.AtTime(obs_date, hhmm, station);
         double effective_temp = get_effective_temp(i);
-        // 海面基準気温 T0 = T_obs + 0.0065 * h_stn (全時刻欠測時のみ 15.0℃)
-        double sea_temp_c = (effective_temp > -900.0) ? (effective_temp + L * result.station.alt) : 15.0;
+        // 気温または官署標高が不明の場合は海面基準気温に標準値15℃を用いる。
+        double sea_temp_c = (effective_temp > -900.0 && active && std::isfinite(station.alt)) ? (effective_temp + L * station.alt) : 15.0;
 
         hw.single_target_press = -999.0;
         hw.target_press = -999.0;
@@ -1433,9 +1424,9 @@ void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elev
         hw.spatial = SpatialPressureResult{};
 
         // 1. 従来の最寄り単点観測所からの現地気圧換算
-        if (hw.station_press > 0.0) {
+        if (hw.station_press > 0.0 && active && std::isfinite(station.barometer_m)) {
             hw.single_target_press = CalculatePressureFromStation(
-                hw.station_press, result.station.alt, sea_temp_c, target_elevation_m
+                hw.station_press, station.barometer_m, sea_temp_c, target_elevation_m
             );
         } else if (hw.sea_press > 0.0) {
             hw.single_target_press = CalculatePressureFromSeaLevel(hw.sea_press, sea_temp_c, target_elevation_m);
@@ -1445,7 +1436,7 @@ void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elev
         bool mountain_direct_guard = (
             !result.is_realtime &&
             result.distance_km < 5.0 &&
-            std::fabs(target_elevation_m - result.station.alt) < 500.0 &&
+            active && std::fabs(target_elevation_m - station.barometer_m) < 500.0 &&
             hw.station_press > 0.0 &&
             hw.sea_press <= -900.0
         );
@@ -1456,12 +1447,14 @@ void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elev
             for (const auto& ns : result.neighbor_series) {
                 const NeighborTimeObs* obs = FindObsAtTime(ns, hw.hour, hw.minute, i);
                 if (!obs || obs->sea_press <= 0.0 || obs->temp <= -900.0) continue;
+                JmaStation neighbor;
+                if (!ns.station.AtTime(obs_date, hhmm, neighbor) || !std::isfinite(neighbor.alt)) continue;
                 SpatialStationInput inp;
                 inp.amedas_id = ns.station.amedas_id;
                 inp.name = ns.station.name;
-                inp.lat = ns.station.lat;
-                inp.lon = ns.station.lon;
-                inp.alt_m = ns.station.alt;
+                inp.lat = neighbor.lat;
+                inp.lon = neighbor.lon;
+                inp.alt_m = neighbor.alt;
                 inp.sea_level_pressure = obs->sea_press;
                 inp.temp_c = obs->temp;
                 spatial_inputs.push_back(std::move(inp));

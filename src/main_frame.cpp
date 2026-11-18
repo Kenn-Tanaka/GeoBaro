@@ -64,6 +64,7 @@ wxEND_EVENT_TABLE()
 
 static wxString BuildJmaStatusSuffix(const JmaDailyResult& jma) {
     wxString suffix;
+    if (jma.year > 0 && jma.year < 1961) suffix += wxT("・観測所の位置は現在の地点で近似");
     if (jma.used_fallback_station) {
         suffix += wxT("・代替官署");
     }
@@ -107,7 +108,7 @@ static std::string CsvEscape(const std::string& field) {
 MainFrame::MainFrame(const wxString& title)
     : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxDefaultSize),
       m_zoomTimer(this, ID_TIMER_ZOOM) {
-    SetIcon(wxICON(app_icon));
+    SetIcon(wxICON(GeoBaro));
     wxRect workArea = wxGetClientDisplayRect();
     wxSize initSz = FromDIP(wxSize(1080, 820));
     wxSize minSz = FromDIP(wxSize(920, 700));
@@ -438,6 +439,9 @@ void MainFrame::EnqueueJob(WorkerJob job) {
 
 void MainFrame::SetSearchBusy(bool busy) {
     if (!m_btnSearch) return;
+    m_btnAddPreset->Enable(!busy);
+    m_btnDelPreset->Enable(!busy && GetSelectedPreset());
+    if (busy) SetExportControlsEnabled(false);
     if (busy) {
         m_btnSearch->SetLabel(wxT("中止"));
         m_btnSearch->SetToolTip(wxT("実行中のデータ取得をキャンセルします"));
@@ -467,7 +471,7 @@ double MainFrame::ReadSpinHeightAgl(bool commit_text) {
 }
 
 void MainFrame::ApplyHeightAglValue(double new_height) {
-    if (!m_lastLoc.success) return;
+    if (!m_lastLoc.success || m_dataJobInFlight) return;
 
     m_lastHeightAgl = new_height;
     UpdateElevationLabel();
@@ -605,6 +609,7 @@ void MainFrame::OnSearch(wxCommandEvent& event) {
         m_activeDataKind = JobKind::None;
         SetSearchBusy(false);
         m_mapPanel->ResetDragOffset();
+        RestoreDisplayedInputs();
         SetExportControlsEnabled(m_lastJma.success && !m_lastJma.hours.empty());
         UpdateStatusBarInfo(wxT("照会をキャンセルしました"), false);
         return;
@@ -623,6 +628,7 @@ void MainFrame::OnSearch(wxCommandEvent& event) {
     WorkerJob job;
     job.kind = JobKind::FullSearch;
     job.input_location = std::string(input.ToUTF8());
+    if (const auto* p = GetSelectedPreset()) job.preset_name = p->name;
     job.year = date.GetYear();
     job.month = date.GetMonth() + 1;
     job.day = date.GetDay();
@@ -725,7 +731,7 @@ void MainFrame::OnZoomTimer(wxTimerEvent& WXUNUSED(event)) {
 }
 
 void MainFrame::OnMapLocationMoved(double new_lat, double new_lon) {
-    if (!m_lastLoc.success || m_isClosing.load()) {
+    if (!m_lastLoc.success || m_isClosing.load() || (m_dataJobInFlight && m_activeDataKind == JobKind::FullSearch)) {
         m_mapPanel->ResetDragOffset();
         return;
     }
@@ -775,7 +781,8 @@ void MainFrame::AttachPrevStationSnapshot(WorkerJob& job, double new_lat, double
 }
 
 void MainFrame::OnResetPosition(wxCommandEvent& WXUNUSED(event)) {
-    if (!m_lastLoc.success || !m_isFineTuned || m_isClosing.load()) return;
+    if (!m_lastLoc.success || !m_isFineTuned || m_isClosing.load() ||
+        (m_dataJobInFlight && m_activeDataKind == JobKind::FullSearch)) return;
 
     m_zoomTimer.Stop();
     wxDateTime date = m_datePicker->GetValue();
@@ -847,7 +854,7 @@ void MainFrame::WorkerLoop() {
         res.base_lon = job.base_lon;
         res.is_fine_tuned = job.is_fine_tuned;
         res.is_reset = job.is_reset;
-        res.from_preset = job.from_preset;
+        res.preset_name = job.preset_name;
 
         auto shouldCancel = [this, seq = job.seq]() {
             return m_isClosing.load() || seq != m_requestSeq.load();
@@ -905,7 +912,8 @@ void MainFrame::WorkerLoop() {
                 if (!shouldCancel()) {
                     double dist = 0.0;
                     bool realtimeCandidate = JmaService::IsRealtimeDateCandidate(job.year, job.month, job.day);
-                    JmaStation stn = JmaService::FindNearestStation(job.lat, job.lon, dist, realtimeCandidate, elev);
+                    JmaStation stn = JmaService::FindNearestStation(job.lat, job.lon, dist, realtimeCandidate, elev,
+                        job.year * 10000 + job.month * 100 + job.day);
                     if (job.have_prev_station &&
                         job.can_reuse_spatial_neighbors &&
                         job.prev_year == job.year && job.prev_month == job.month && job.prev_day == job.day &&
@@ -1016,11 +1024,15 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
     if (res.kind == JobKind::FineTune) {
         if (res.elev_failed) {
             m_mapPanel->ResetDragOffset();
+            SetExportControlsEnabled(m_lastJma.success && !m_lastJma.hours.empty());
             UpdateStatusBarInfo(wxT("選択地点の標高を取得できませんでした（海域・データ範囲外のため直前の地点を維持します）"), false);
             checkPendingDateOrMap(res.year, res.month, res.day, true);
             return;
         }
 
+        m_lastPresetName.clear();
+        m_choicePreset->SetSelection(0);
+        m_btnDelPreset->Enable(false);
         m_lastLoc = res.loc;
         m_baseInputText = res.base_input_text;
         m_baseAddress = res.base_address;
@@ -1031,10 +1043,6 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
         if (m_isFineTuned) {
             m_fineTunedCoordText = wxString::Format(wxT("%.6f, %.6f"), m_lastLoc.lat, m_lastLoc.lon);
             m_txtLocation->ChangeValue(m_fineTunedCoordText);
-            if (m_choicePreset->GetSelection() != 0) {
-                m_choicePreset->SetSelection(0);
-                m_btnDelPreset->Enable(false);
-            }
         } else {
             m_fineTunedCoordText.Clear();
             m_txtLocation->ChangeValue(wxString::FromUTF8(m_baseInputText));
@@ -1098,6 +1106,7 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
     }
 
     // JobKind::FullSearch
+    m_lastPresetName = res.loc.success ? res.preset_name : std::string();
     if (res.loc.success) {
         m_baseInputText = res.base_input_text;
         m_baseAddress = res.base_address;
@@ -1158,10 +1167,11 @@ void MainFrame::UpdateStationLabels() {
         m_lblDistance->SetLabel(wxT("-"));
         return;
     }
-    wxString stnText = wxString::Format(wxT("%s (%s / 標高 %.1fm)"),
-        wxString::FromUTF8(m_lastJma.station.name),
-        wxString::FromUTF8(m_lastJma.station.pref),
-        m_lastJma.station.alt);
+    const auto& station = m_lastJma.station;
+    wxString ground = std::isfinite(station.alt)
+        ? wxString::Format(wxT("標高 %.1fm"), station.alt) : wxT("官署標高不明");
+    wxString stnText = wxString::Format(wxT("%s (%s / %s)"),
+        wxString::FromUTF8(station.name), wxString::FromUTF8(station.pref), ground);
     m_lblStation->SetLabel(stnText);
     m_lblStation->SetToolTip(stnText);
     m_lblDistance->SetLabel(wxString::Format(wxT("約 %.2f km"), m_lastJma.distance_km));
@@ -1509,25 +1519,32 @@ void MainFrame::LoadPresets() {
     RefreshPresetChoice(0);
 }
 
-void MainFrame::SavePresets() const {
-    wxString path = GetPresetFilePath();
-    wxString tmpPath = path + wxT(".tmp");
-    std::string serialized = PresetStore::Serialize(m_presets);
-    bool writeOk = false;
-    {
-        wxFileOutputStream out(tmpPath);
-        if (out.IsOk()) {
-            out.Write(serialized.data(), serialized.size());
-            if (out.LastWrite() == serialized.size() && out.Close()) {
-                writeOk = true;
-            }
-        }
+bool MainFrame::SavePresets(std::vector<PresetLocation> updated) {
+    if (!PresetStore::Save(GetPresetFilePath().ToStdWstring(), updated)) {
+        wxMessageBox(wxT("プリセットファイルの保存に失敗しました。"), wxT("保存エラー"), wxOK | wxICON_WARNING, this);
+        return false;
     }
-    if (!writeOk || !wxRenameFile(tmpPath, path, true)) {
-        if (wxFileExists(tmpPath)) {
-            wxRemoveFile(tmpPath);
-        }
-        wxMessageBox(wxT("プリセットファイルの保存に失敗しました。"), wxT("保存エラー"), wxOK | wxICON_WARNING, const_cast<MainFrame*>(this));
+    m_presets = std::move(updated);
+    return true;
+}
+
+void MainFrame::RestoreDisplayedInputs() {
+    int selection = 0;
+    for (size_t i = 0; i < m_presets.size(); ++i) {
+        if (m_presets[i].name == m_lastPresetName) selection = static_cast<int>(i + 1);
+    }
+    m_choicePreset->SetSelection(selection);
+    m_btnDelPreset->Enable(selection > 0);
+    if (!m_lastLoc.success) return;
+    m_spinHeightAgl->SetValue(m_lastHeightAgl);
+    m_txtLocation->ChangeValue(m_isFineTuned ? m_fineTunedCoordText : wxString::FromUTF8(m_baseInputText));
+    m_currentZoom = m_mapPanel->GetCurrentTileZoom();
+    UpdateZoomControls();
+    if (m_lastJma.success) {
+        m_suppressDateEvent = true;
+        m_datePicker->SetValue(wxDateTime(m_lastJma.day, static_cast<wxDateTime::Month>(m_lastJma.month - 1), m_lastJma.year));
+        m_suppressDateEvent = false;
+        UpdateDateNavButtons();
     }
 }
 
@@ -1560,7 +1577,6 @@ void MainFrame::OnPresetSelected(wxCommandEvent& WXUNUSED(event)) {
     m_zoomTimer.Stop();
 
     m_spinHeightAgl->SetValue(p.height_agl_m);
-    m_lastHeightAgl = p.height_agl_m;
     m_currentZoom = std::clamp(p.zoom, 10, 18);
     UpdateZoomControls();
 
@@ -1585,7 +1601,7 @@ void MainFrame::OnPresetSelected(wxCommandEvent& WXUNUSED(event)) {
     job.base_lat = p.base_lat;
     job.base_lon = p.base_lon;
     job.is_fine_tuned = p.is_fine_tuned;
-    job.from_preset = true;
+    job.preset_name = p.name;
     job.year = date.GetYear();
     job.month = date.GetMonth() + 1;
     job.day = date.GetDay();
@@ -1655,8 +1671,10 @@ void MainFrame::OnAddPreset(wxCommandEvent& WXUNUSED(event)) {
     item.height_agl_m = cur_height;
     item.zoom = m_currentZoom;
 
-    PresetStore::Upsert(m_presets, item);
-    SavePresets();
+    auto updated = m_presets;
+    PresetStore::Upsert(updated, item);
+    if (!SavePresets(std::move(updated))) return;
+    m_lastPresetName = item.name;
 
     int newIdx = 0;
     for (size_t i = 0; i < m_presets.size(); ++i) {
@@ -1682,8 +1700,10 @@ void MainFrame::OnDeletePreset(wxCommandEvent& WXUNUSED(event)) {
     );
     if (ans != wxYES) return;
 
-    PresetStore::RemoveByIndex(m_presets, static_cast<size_t>(sel - 1));
-    SavePresets();
+    auto updated = m_presets;
+    PresetStore::RemoveByIndex(updated, static_cast<size_t>(sel - 1));
+    if (!SavePresets(std::move(updated))) return;
+    if (targetName == wxString::FromUTF8(m_lastPresetName)) m_lastPresetName.clear();
     RefreshPresetChoice(0);
     SetStatusText(wxString::Format(wxT("プリセット「%s」を削除しました"), targetName));
 }
@@ -1733,12 +1753,14 @@ void MainFrame::SetExportControlsEnabled(bool enabled) {
 }
 
 bool MainFrame::SyncHeightAglIfNeeded() {
+    if (m_dataJobInFlight) return false;
     double current_spin = ReadSpinHeightAgl(true);
     if (m_lastLoc.success && std::abs(current_spin - m_lastHeightAgl) > 1e-6) {
         m_lastHeightAgl = current_spin;
         UpdateElevationLabel();
         if (m_lastJma.success && !m_lastJma.hours.empty()) {
             JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
+            UpdateSpatialSummaryLabel();
             UpdatePressureSummaryLabel();
             PopulateHourlyList(false);
         }
@@ -1880,30 +1902,8 @@ void MainFrame::OnCopyList(wxCommandEvent& WXUNUSED(event)) {
     CopyTextToClipboard(tsv, wxT("リスト全体をクリップボードにコピーしました"));
 }
 
-void MainFrame::OnExportCsv(wxCommandEvent& WXUNUSED(event)) {
-    if (!m_lastJma.success || m_lastJma.hours.empty()) return;
-
-    SyncHeightAglIfNeeded();
-
-    wxFileDialog saveFileDialog(
-        this,
-        wxT("気象・換算気圧データの保存"),
-        wxT(""),
-        wxString::Format(wxT("weather_elevation_%04d%02d%02d.csv"), m_lastJma.year, m_lastJma.month, m_lastJma.day),
-        wxT("CSVファイル (*.csv)|*.csv"),
-        wxFD_SAVE | wxFD_OVERWRITE_PROMPT
-    );
-
-    if (saveFileDialog.ShowModal() == wxID_CANCEL) return;
-
-    wxFileOutputStream outputStream(saveFileDialog.GetPath());
-    if (!outputStream.IsOk()) {
-        wxMessageBox(wxT("ファイルの作成に失敗しました。"), wxT("保存エラー"), wxOK | wxICON_ERROR, this);
-        return;
-    }
-
-    const PresetLocation* preset = GetSelectedPreset();
-    std::string preset_name = preset ? preset->name : "-";
+std::string MainFrame::BuildCsv() const {
+    const std::string preset_name = m_lastPresetName.empty() ? "-" : m_lastPresetName;
 
     std::string export_addr = m_baseAddress.empty() ? m_lastLoc.resolved_address : m_baseAddress;
     if (m_isFineTuned) {
@@ -1924,6 +1924,7 @@ void MainFrame::OnExportCsv(wxCommandEvent& WXUNUSED(event)) {
     ss << "# 換算標高(海抜m)," << (m_lastLoc.elevation + m_lastHeightAgl) << "\n";
     std::string stn_info = std::string(m_lastJma.station.name) + "(" + m_lastJma.station.pref + ")";
     ss << "# 最寄り官署," << CsvEscape(stn_info) << ",距離(km)," << std::setprecision(2) << m_lastJma.distance_km << "\n";
+    if (m_lastJma.year < 1961) ss << "# 観測所の位置,現在の地点で近似\n";
     const HourlyWeather* latestSp = JmaService::FindLatestValidSpatialHour(m_lastJma);
     if (latestSp && latestSp->spatial.valid) {
         ss << "# 空間補間手法," << SpatialPressureCalculator::MethodToString(latestSp->spatial.method_used)
@@ -1961,7 +1962,24 @@ void MainFrame::OnExportCsv(wxCommandEvent& WXUNUSED(event)) {
         ss << "\n";
     }
 
-    std::string csv_data = ss.str();
+    return ss.str();
+}
+
+void MainFrame::OnExportCsv(wxCommandEvent& WXUNUSED(event)) {
+    if (m_dataJobInFlight || !m_lastJma.success || m_lastJma.hours.empty()) return;
+    SyncHeightAglIfNeeded();
+    const std::string csv_data = BuildCsv();
+    wxFileDialog saveFileDialog(
+        this, wxT("気象・換算気圧データの保存"), wxEmptyString,
+        wxString::Format(wxT("weather_elevation_%04d%02d%02d.csv"), m_lastJma.year, m_lastJma.month, m_lastJma.day),
+        wxT("CSVファイル (*.csv)|*.csv"), wxFD_SAVE | wxFD_OVERWRITE_PROMPT
+    );
+    if (saveFileDialog.ShowModal() != wxID_OK) return;
+    wxFileOutputStream outputStream(saveFileDialog.GetPath());
+    if (!outputStream.IsOk()) {
+        wxMessageBox(wxT("ファイルの作成に失敗しました。"), wxT("保存エラー"), wxOK | wxICON_ERROR, this);
+        return;
+    }
     outputStream.Write(csv_data.data(), csv_data.size());
     if (outputStream.LastWrite() != csv_data.size() || !outputStream.Close()) {
         wxMessageBox(wxT("CSVファイルの書き込み中にエラーが発生しました。"), wxT("保存エラー"), wxOK | wxICON_ERROR, this);

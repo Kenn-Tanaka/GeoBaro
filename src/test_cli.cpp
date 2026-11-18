@@ -248,8 +248,8 @@ int main() {
               << "m, 距離" << fujinomiya_dist << "km), 御殿場(460m)選定官署="
               << gotemba_stn.name << "(標高" << gotemba_stn.alt << "m)" << std::endl;
 
-    // 官署と同一標高への換算時は実測現地気圧と完全一致すること
-    JmaService::RecalculatePressures(daily, stn.alt);
+    // 気圧計と同一高度への換算時は実測現地気圧と完全一致すること
+    JmaService::RecalculatePressures(daily, daily.station.barometer_m);
     assert(std::abs(daily.hours[11].target_press - daily.hours[11].station_press) < 1e-6);
 
     // 気象庁品質記号: 正常値・準正常値 ')' は採用、資料不足値 ']' は除外
@@ -377,6 +377,12 @@ int main() {
         assert(sp_past->spatial.stations_used.size() == 6);
         assert(sp_past->has_spatial_correction);
         assert(JmaService::CanReuseNeighborDataForLocation(past_spatial, loc.lat + 0.005, loc.lon + 0.005));
+
+        auto tateno = JmaService::FetchDailyWeatherForLocation(36.056667, 140.125, 2024, 5, 1, 25, nullptr, 25);
+        assert(tateno.success && std::string(tateno.station.block_no) == "47646" && tateno.distance_km < 0.001);
+        const auto* tateno_hour = JmaService::FindLatestValidSpatialHour(tateno);
+        assert(tateno_hour && !tateno_hour->spatial.stations_used.empty());
+        assert(tateno_hour->spatial.stations_used.front().amedas_id == tateno.station.amedas_id);
 
         const HourlyWeather* sp_today = JmaService::FindLatestValidSpatialHour(today_res);
         assert(sp_today != nullptr && sp_today->spatial.valid);

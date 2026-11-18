@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <windows.h>
+#include <atomic>
 
 static std::string EscapeField(const std::string& s) {
     std::string out;
@@ -80,7 +82,7 @@ std::vector<PresetLocation> PresetStore::Deserialize(const std::string& content)
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty() || line == "# GeoBaro Presets v1") continue;
 
         auto fields = SplitTab(line);
         if (fields.size() < 10) continue;
@@ -108,6 +110,28 @@ std::vector<PresetLocation> PresetStore::Deserialize(const std::string& content)
         }
     }
     return result;
+}
+
+bool PresetStore::Save(const std::filesystem::path& path, const std::vector<PresetLocation>& presets) {
+    const std::string data = Serialize(presets);
+    if (data.size() > MAXDWORD) return false;
+    static std::atomic<unsigned long> counter{0};
+    std::filesystem::path tmp;
+    HANDLE file;
+    do {
+        tmp = path;
+        tmp += L"." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(++counter) + L".tmp";
+        file = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    } while (file == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS);
+    if (file == INVALID_HANDLE_VALUE) return false;
+
+    DWORD written = 0;
+    bool ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr)
+              && written == data.size() && FlushFileBuffers(file);
+    if (!CloseHandle(file)) ok = false;
+    if (ok && MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
+    DeleteFileW(tmp.c_str());
+    return false;
 }
 
 void PresetStore::Upsert(std::vector<PresetLocation>& presets, const PresetLocation& item) {

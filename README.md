@@ -20,9 +20,10 @@
    * よく使う地点を名前付きで登録・選択呼び出し・削除可能。微修正済みの緯度経度・元住所表記・地上高（m）・地図ズーム倍率もまとめて保存されます（設定ファイル `presets.dat` は実行ファイルと同階層またはユーザーデータディレクトリへ保存）。
 
 4. **最寄り気象官署の自動探索とデータ取得（気象庁Web連携）**
-   * 全国の気圧観測官署（気象台・特別地域気象観測所など154地点）のマスターを内蔵。
+   * 全国の気圧観測官署（つくば（館野）を含む155地点）のマスターを内蔵。
+   * 1961年以降は気象庁の地点情報履歴から対象日の位置を選び、単点換算には観測時点の気圧計の海抜高度、気温の海面換算には官署標高を使います。日単位の官署選定・距離表示は正午基準、各時刻の計算は観測時刻基準です。東京の2014年12月2日の移転は9時40分（JST）で切り替えます。1960年以前は現在位置から官署を近似選定し、利用できる海面気圧から換算します。官署標高またはその日の気温が不明な場合、単点換算の海面基準気温は15 ℃です。
    * 大圏距離計算（球面三角法）に現在地地盤標高と官署標高の差（標高差 $50\text{ m}$ あたり水平距離 $1\text{ km}$ 相当の重み）を加味した評価スコアにより、平野部で極端な山岳官署（富士山頂等）が選ばれることによる外挿誤差を防ぎつつ最適な最寄り気圧観測所を自動選定。
-   * 対象日ピッカーに加え、`◀`（前日）・`▶`（翌日）・`今日` ボタンを備え、日付変更時は現在地を保ったまま気象データのみを高速に自動再照会します。また、通信中に「中止」ボタンでキャンセルも可能です。
+   * 対象日ピッカーに加え、`◀`（前日）・`▶`（翌日）・`今日` ボタンを備え、直近9日以内の過去データが未公開または取得失敗の場合は、利用可能なAMeDAS速報を照会します。日付変更時は現在地を保ったまま気象データのみを高速に自動再照会します。また、通信中に「中止」ボタンでキャンセルも可能です。
    * 指定日の1時間ごと（過去日は1時〜24時、当日は0時〜最新時刻）の観測値（気温、湿度、観測所現地気圧、海面気圧、天候）を取得します。
 
 5. **測高公式 ＆ 複数観測所の空間補間による現在地現地気圧算出（リアルタイム再計算対応）**
@@ -58,6 +59,26 @@
    mingw32-make test_cli.exe
    ```
 
+wxWidgetsをCMakeとNinjaでビルドする場合は、MinGWがPATHにある状態で次の手順を使えます。以下は64ビット版の例です。
+
+```bat
+set WX_DIR=C:/src/wxWidgets-3.2.6
+set WX_BUILD=C:/build/wx326
+cmake -S %WX_DIR% -B %WX_BUILD% -G Ninja -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxUSE_LIBPNG=builtin -DwxUSE_ZLIB=builtin -DwxUSE_REGEX=builtin -DwxUSE_EXPAT=builtin -DwxUSE_LIBJPEG=OFF -DwxUSE_LIBTIFF=OFF -DwxUSE_WEBVIEW=OFF -DwxUSE_WEBREQUEST=OFF -DwxUSE_STC=OFF "-DCMAKE_C_FLAGS=-ffile-prefix-map=%WX_DIR%=wxWidgets" "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=%WX_DIR%=wxWidgets"
+cmake --build %WX_BUILD% --parallel --target wxcore wxbase wxnet wxadv wxexpat
+mingw32-make WX_DIR=%WX_DIR% WX_LIB_ROOT=%WX_BUILD%/lib/gcc_x64_lib
+```
+
+固定データによる回帰テストと実通信テストは個別に実行できます。
+
+```bat
+mingw32-make test_offline.exe test_cli.exe
+test_offline.exe
+test_cli.exe
+```
+
+履歴を更新する際は気象庁の `smaster.index` ZIPを取得し、`python generate_stations_cpp.py --import-history smaster.index.zip` を実行します。通常の再生成は `python generate_stations_cpp.py` で行えます。地上気象観測の地点情報履歴を加工して作成しています。[気象庁の配布ページ](https://www.data.jma.go.jp/stats/mdrr/man/kansoku_gaiyou.html)
+
 ---
 
 ## 3. 実行ファイル・ソースコード構成
@@ -70,10 +91,10 @@
 * `src/gsi_service.h` / `src/gsi_service.cpp`: 国土地理院 住所検索API・標高API・Webメルカトル座標変換・LRUキャッシュ付きタイル取得ロジック
 * `src/preset_store.h` / `src/preset_store.cpp`: 現在地プリセットのシリアライズ・管理ロジック
 * `src/resource.rc`: Windows アプリケーションアイコンおよび Common Controls v6 / PerMonitorV2 DPI Awareness マニフェスト定義
-* `icons/app_icon.ico`: アプリケーション用アイコンファイル（アネロイド気圧計・コンパス合成デザイン）
+* `icons/GeoBaro.ico`: アプリケーション用アイコンファイル（アネロイド気圧計・コンパス合成デザイン）
 * `src/jma_service.h` / `src/jma_service.cpp`: 気象庁過去データ検索HTMLパーサー・最寄り地点探索・周辺観測所バッチ取得・測高気圧換算
 * `src/spatial_pressure.h` / `src/spatial_pressure.cpp`: 複数観測所の空間補間（重み付き最小二乗平面近似・IDW・測高換算）による局所気圧算出モジュール
-* `src/jma_stations.h` / `src/jma_stations.cpp`: 全154地点の気象官署マスターテーブル
+* `src/jma_stations.h` / `src/jma_stations.cpp`: 全155地点の気象官署マスターテーブル
 * `jma_stations.json` / `generate_stations_cpp.py`: 気象官署マスターデータ（JSON）および `src/jma_stations.cpp` 再生成用スクリプト
 * `src/http_transport.h` / `src/http_transport.cpp`: WinINet によるHTTPS通信ラッパー（タイムアウト・HTTPステータス検証付き）
 * `Makefile`: MinGW g++ 用の静的リンクビルド構成（画像コーデックは PNG のみリンク、`-fmacro-prefix-map` 指定済み）
@@ -88,7 +109,7 @@
 
 ### ソフトウェアおよびアイコンのライセンス（MIT License）
 
-* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/app_icon.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
+* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/GeoBaro.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
 * 静的リンクされた単一バイナリ（`GeoBaro.exe`）には wxWidgets、libpng、zlib、NanoSVG、MinGW-w64 winpthreads / runtime、GCC Runtime Libraries 等が含まれます。これらの著作権表示・ライセンス条件（`wxWindows Library Licence, Version 3.1`、`GCC Runtime Library Exception v3.1` 等）は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) に記載しています。
 * バイナリ軽量化およびライセンス表記最小化のため、画像ハンドラは PNG（および標準 BMP）のみを有効化し、`libtiff` / `libjpeg` はリンクしていません。
 

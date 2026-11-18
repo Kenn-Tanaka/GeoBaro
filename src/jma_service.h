@@ -76,21 +76,21 @@ public:
     // 指定日が JST の当日以降（リアルタイムAMeDAS対象候補）か判定
     static bool IsRealtimeDateCandidate(int year, int month, int day);
 
-    // 現在地から最寄りの気圧観測所を探索 (154地点)
+    // 現在地から最寄りの気圧観測所を探索
     // require_amedas_pressure=true の場合、AMeDAS JSONで気圧を観測しない地点(例: 富士山 50066)を除外
     // ground_elev_m > -9000.0 の場合、大圏距離に標高差ペナルティ(50mあたり1km相当)を加味して選定
     static JmaStation FindNearestStation(
         double lat, double lon,
         double& out_distance_km,
         bool require_amedas_pressure = false,
-        double ground_elev_m = -9999.0
+        double ground_elev_m = -9999.0, int yyyymmdd = 0
     );
 
     // 距離（および標高差ペナルティ付きスコア）順に観測所一覧を探索
     static std::vector<std::pair<JmaStation, double>> FindStationsSortedByDistance(
         double lat, double lon,
         bool require_amedas_pressure = false,
-        double ground_elev_m = -9999.0
+        double ground_elev_m = -9999.0, int yyyymmdd = 0
     );
 
     // 指定観測所・指定日の気象データを取得し、現在地標高に換算
