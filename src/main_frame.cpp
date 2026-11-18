@@ -76,6 +76,12 @@ static wxString BuildJmaStatusSuffix(const JmaDailyResult& jma) {
     if (jma.has_missing_pressure) {
         suffix += wxT("・一部気圧欠測");
     }
+    const HourlyWeather* spHour = JmaService::FindLatestValidSpatialHour(jma);
+    if (spHour && spHour->spatial.valid) {
+        suffix += wxString::Format(wxT("・空間補間(%s %zu点)"),
+            wxString::FromUTF8(SpatialPressureCalculator::MethodToString(spHour->spatial.method_used)),
+            spHour->spatial.stations_used.size());
+    }
     return suffix;
 }
 
@@ -316,7 +322,7 @@ void MainFrame::InitUi() {
 
     // サマリーパネル
     wxStaticBoxSizer* infoBox = new wxStaticBoxSizer(wxVERTICAL, rootPanel, wxT("現在地および最寄り観測所情報"));
-    wxFlexGridSizer* gridSizer = new wxFlexGridSizer(6, 2, FromDIP(8), FromDIP(10));
+    wxFlexGridSizer* gridSizer = new wxFlexGridSizer(7, 2, FromDIP(7), FromDIP(10));
     gridSizer->AddGrowableCol(1, 1);
 
     gridSizer->Add(new wxStaticText(rootPanel, wxID_ANY, wxT("解決住所:")), 0, wxALIGN_CENTER_VERTICAL);
@@ -348,6 +354,10 @@ void MainFrame::InitUi() {
     gridSizer->Add(new wxStaticText(rootPanel, wxID_ANY, wxT("官署までの距離:")), 0, wxALIGN_CENTER_VERTICAL);
     m_lblDistance = new wxStaticText(rootPanel, wxID_ANY, wxT("-"));
     gridSizer->Add(m_lblDistance, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+
+    gridSizer->Add(new wxStaticText(rootPanel, wxID_ANY, wxT("空間補間補正:")), 0, wxALIGN_CENTER_VERTICAL);
+    m_lblSpatialSummary = new wxStaticText(rootPanel, wxID_ANY, wxT("-"), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+    gridSizer->Add(m_lblSpatialSummary, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
 
     gridSizer->Add(new wxStaticText(rootPanel, wxID_ANY, wxT("換算気圧レンジ:")), 0, wxALIGN_CENTER_VERTICAL);
     m_lblPressureSummary = new wxStaticText(rootPanel, wxID_ANY, wxT("-"), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
@@ -464,6 +474,7 @@ void MainFrame::ApplyHeightAglValue(double new_height) {
 
     if (m_lastJma.success && !m_lastJma.hours.empty()) {
         JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
+        UpdateSpatialSummaryLabel();
         UpdatePressureSummaryLabel();
         PopulateHourlyList(false);
         UpdateStatusBarInfo(
@@ -742,6 +753,16 @@ void MainFrame::OnMapLocationMoved(double new_lat, double new_lon) {
     job.map_w = mapSz.GetWidth();
     job.map_h = mapSz.GetHeight();
 
+    AttachPrevStationSnapshot(job, new_lat, new_lon);
+
+    UpdateStatusBarInfo(wxString::Format(wxT("選択地点 (%.6f, %.6f) の標高を取得しています..."), new_lat, new_lon), false);
+    m_dataJobInFlight = true;
+    m_activeDataKind = JobKind::FineTune;
+    SetSearchBusy(true);
+    EnqueueJob(std::move(job));
+}
+
+void MainFrame::AttachPrevStationSnapshot(WorkerJob& job, double new_lat, double new_lon) const {
     if (m_lastJma.success) {
         job.have_prev_station = true;
         job.prev_prec_no = m_lastJma.station.prec_no;
@@ -749,13 +770,8 @@ void MainFrame::OnMapLocationMoved(double new_lat, double new_lon) {
         job.prev_year = m_lastJma.year;
         job.prev_month = m_lastJma.month;
         job.prev_day = m_lastJma.day;
+        job.can_reuse_spatial_neighbors = JmaService::CanReuseNeighborDataForLocation(m_lastJma, new_lat, new_lon);
     }
-
-    UpdateStatusBarInfo(wxString::Format(wxT("選択地点 (%.6f, %.6f) の標高を取得しています..."), new_lat, new_lon), false);
-    m_dataJobInFlight = true;
-    m_activeDataKind = JobKind::FineTune;
-    SetSearchBusy(true);
-    EnqueueJob(std::move(job));
 }
 
 void MainFrame::OnResetPosition(wxCommandEvent& WXUNUSED(event)) {
@@ -784,14 +800,7 @@ void MainFrame::OnResetPosition(wxCommandEvent& WXUNUSED(event)) {
     job.map_w = mapSz.GetWidth();
     job.map_h = mapSz.GetHeight();
 
-    if (m_lastJma.success) {
-        job.have_prev_station = true;
-        job.prev_prec_no = m_lastJma.station.prec_no;
-        job.prev_block_no = m_lastJma.station.block_no;
-        job.prev_year = m_lastJma.year;
-        job.prev_month = m_lastJma.month;
-        job.prev_day = m_lastJma.day;
-    }
+    AttachPrevStationSnapshot(job, m_baseLat, m_baseLon);
 
     UpdateStatusBarInfo(wxT("元の検索位置へ戻しています..."), false);
     m_dataJobInFlight = true;
@@ -898,6 +907,7 @@ void MainFrame::WorkerLoop() {
                     bool realtimeCandidate = JmaService::IsRealtimeDateCandidate(job.year, job.month, job.day);
                     JmaStation stn = JmaService::FindNearestStation(job.lat, job.lon, dist, realtimeCandidate, elev);
                     if (job.have_prev_station &&
+                        job.can_reuse_spatial_neighbors &&
                         job.prev_year == job.year && job.prev_month == job.month && job.prev_day == job.day &&
                         stn.prec_no == job.prev_prec_no && stn.block_no == job.prev_block_no) {
                         res.reuse_existing_jma = true;
@@ -987,6 +997,7 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
 
         UpdateStationLabels();
         JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
+        UpdateSpatialSummaryLabel();
         UpdatePressureSummaryLabel();
         PopulateHourlyList(m_lastJma.is_realtime);
 
@@ -1043,9 +1054,13 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
 
         if (res.reuse_existing_jma) {
             m_lastJma.distance_km = res.new_distance_km;
+            m_lastJma.target_lat = m_lastLoc.lat;
+            m_lastJma.target_lon = m_lastLoc.lon;
+            m_lastJma.has_target_coords = true;
             UpdateStationLabels();
             if (m_lastJma.success && !m_lastJma.hours.empty()) {
                 JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
+                UpdateSpatialSummaryLabel();
                 UpdatePressureSummaryLabel();
                 PopulateHourlyList(false);
             }
@@ -1062,6 +1077,7 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
             }
             UpdateStationLabels();
             JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
+            UpdateSpatialSummaryLabel();
             UpdatePressureSummaryLabel();
             PopulateHourlyList(m_lastJma.is_realtime);
         }
@@ -1151,6 +1167,69 @@ void MainFrame::UpdateStationLabels() {
     m_lblDistance->SetLabel(wxString::Format(wxT("約 %.2f km"), m_lastJma.distance_km));
 }
 
+void MainFrame::UpdateSpatialSummaryLabel() {
+    if (!m_lblSpatialSummary) return;
+    if (!m_lastJma.success) {
+        m_lblSpatialSummary->SetLabel(wxT("-"));
+        m_lblSpatialSummary->SetToolTip(wxString());
+        return;
+    }
+
+    const HourlyWeather* latest = JmaService::FindLatestValidSpatialHour(m_lastJma);
+    if (!latest || !latest->spatial.valid) {
+        wxString text = wxT("単点換算 (SingleNearest / 空間補間データなし)");
+        m_lblSpatialSummary->SetLabel(text);
+        m_lblSpatialSummary->SetToolTip(text);
+        if (m_lblSpatialSummary->GetParent()) m_lblSpatialSummary->GetParent()->Layout();
+        return;
+    }
+
+    const SpatialPressureResult& sp = latest->spatial;
+    wxString methodStr = wxString::FromUTF8(SpatialPressureCalculator::MethodToString(sp.method_used));
+    wxString corrStr = latest->has_spatial_correction
+        ? wxString::Format(wxT("%+.2f hPa"), latest->spatial_correction)
+        : wxT("-");
+
+    wxString gradSummary;
+    if (sp.has_gradient) {
+        double grad_mag = std::hypot(sp.pressure_gradient_x, sp.pressure_gradient_y);
+        gradSummary = wxString::Format(wxT(" / 勾配 %.3f hPa/km"), grad_mag);
+    }
+
+    wxString summary = wxString::Format(
+        wxT("%s (%s %zu地点 / 推定P0 %.1f / 現地T %.1f℃%s)"),
+        corrStr,
+        methodStr,
+        sp.stations_used.size(),
+        sp.interpolated_sea_level_pressure,
+        sp.estimated_temp,
+        gradSummary);
+
+    wxString tip = wxString::Format(
+        wxT("対象時刻: %s / 補間手法: %s (%zu地点)\n空間補間補正(対単点): %s\n推定海面気圧: %.2f hPa / 推定現地気温: %.2f ℃"),
+        wxString::FromUTF8(latest->FormatTimeHHMM()),
+        methodStr,
+        sp.stations_used.size(),
+        corrStr,
+        sp.interpolated_sea_level_pressure,
+        sp.estimated_temp);
+    if (sp.has_gradient) {
+        tip += wxString::Format(wxT("\n気圧傾度 (東西/南北): %+.4f / %+.4f hPa/km"),
+            sp.pressure_gradient_x, sp.pressure_gradient_y);
+    }
+    if (!sp.stations_used.empty()) {
+        tip += wxT("\n使用観測所:");
+        for (const auto& st : sp.stations_used) {
+            tip += wxString::Format(wxT("\n  %s: 距離 %.1f km / 重み %.3f / 海面 %.1f hPa"),
+                wxString::FromUTF8(st.name), st.distance_km, st.weight, st.sea_level_pressure);
+        }
+    }
+
+    m_lblSpatialSummary->SetLabel(summary);
+    m_lblSpatialSummary->SetToolTip(tip);
+    if (m_lblSpatialSummary->GetParent()) m_lblSpatialSummary->GetParent()->Layout();
+}
+
 void MainFrame::UpdatePressureSummaryLabel() {
     if (!m_lastJma.success) {
         m_lblPressureSummary->SetLabel(wxT("-"));
@@ -1168,8 +1247,17 @@ void MainFrame::UpdatePressureSummaryLabel() {
         stats.latest_press, wxString::FromUTF8(stats.latest_time),
         stats.max_press, wxString::FromUTF8(stats.max_time),
         stats.min_press, wxString::FromUTF8(stats.min_time));
+    wxString tip = summary;
+    const HourlyWeather* latestSp = JmaService::FindLatestValidSpatialHour(m_lastJma);
+    if (latestSp && latestSp->has_spatial_correction) {
+        tip += wxString::Format(wxT("\n最新時刻(%s): 単点換算 %.2f hPa → 空間補間後 %.2f hPa (補正 %+.2f hPa)"),
+            wxString::FromUTF8(latestSp->FormatTimeHHMM()),
+            latestSp->single_target_press,
+            latestSp->target_press,
+            latestSp->spatial_correction);
+    }
     m_lblPressureSummary->SetLabel(summary);
-    m_lblPressureSummary->SetToolTip(summary);
+    m_lblPressureSummary->SetToolTip(tip);
     if (m_lblPressureSummary->GetParent()) m_lblPressureSummary->GetParent()->Layout();
 }
 
@@ -1177,6 +1265,10 @@ void MainFrame::ClearWeatherSummaryUi() {
     m_lblStation->SetLabel(wxT("-"));
     m_lblStation->SetToolTip(wxString());
     m_lblDistance->SetLabel(wxT("-"));
+    if (m_lblSpatialSummary) {
+        m_lblSpatialSummary->SetLabel(wxT("-"));
+        m_lblSpatialSummary->SetToolTip(wxString());
+    }
     m_lblPressureSummary->SetLabel(wxT("-"));
     m_lblPressureSummary->SetToolTip(wxString());
 }
@@ -1359,6 +1451,7 @@ void MainFrame::UpdateUiWithResult(
         JmaService::RecalculatePressures(m_lastJma, m_lastLoc.elevation + m_lastHeightAgl);
     }
 
+    UpdateSpatialSummaryLabel();
     UpdatePressureSummaryLabel();
     PopulateHourlyList(m_lastJma.is_realtime);
 
@@ -1830,7 +1923,25 @@ void MainFrame::OnExportCsv(wxCommandEvent& WXUNUSED(event)) {
     ss << "# 地上高(m)," << m_lastHeightAgl << "\n";
     ss << "# 換算標高(海抜m)," << (m_lastLoc.elevation + m_lastHeightAgl) << "\n";
     std::string stn_info = std::string(m_lastJma.station.name) + "(" + m_lastJma.station.pref + ")";
-    ss << "# 最寄り官署," << CsvEscape(stn_info) << ",距離(km)," << std::setprecision(2) << m_lastJma.distance_km << "\n\n";
+    ss << "# 最寄り官署," << CsvEscape(stn_info) << ",距離(km)," << std::setprecision(2) << m_lastJma.distance_km << "\n";
+    const HourlyWeather* latestSp = JmaService::FindLatestValidSpatialHour(m_lastJma);
+    if (latestSp && latestSp->spatial.valid) {
+        ss << "# 空間補間手法," << SpatialPressureCalculator::MethodToString(latestSp->spatial.method_used)
+           << ",使用地点数," << latestSp->spatial.stations_used.size() << "\n";
+        ss << "# 空間補間最新対象時刻," << latestSp->FormatTimeHHMM()
+           << ",推定海面気圧(hPa)," << std::setprecision(2) << latestSp->spatial.interpolated_sea_level_pressure
+           << ",推定現地気温(℃)," << std::setprecision(1) << latestSp->spatial.estimated_temp;
+        if (latestSp->has_spatial_correction) {
+            ss << ",補正値(hPa)," << std::setprecision(2) << latestSp->spatial_correction;
+        }
+        ss << "\n";
+        if (latestSp->spatial.has_gradient) {
+            ss << std::setprecision(4)
+               << "# 気圧傾度(東西/南北 hPa/km)," << latestSp->spatial.pressure_gradient_x
+               << "," << latestSp->spatial.pressure_gradient_y << "\n";
+        }
+    }
+    ss << "\n";
 
     ss << "時刻,天候,気温(℃),湿度(％),観測所気圧(hPa),海面気圧(hPa),現在地換算気圧(hPa),気圧差(hPa)\n";
     ss << std::fixed << std::setprecision(1);

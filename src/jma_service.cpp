@@ -647,40 +647,26 @@ static std::vector<std::string> SplitTableCells(const std::string& tr_html) {
 
 namespace {
 
-JmaDailyResult FetchHourlyS1Internal(
+constexpr size_t kMaxSpatialFetchStations = 8; // N=6 + 欠測/取得失敗時の予備2点
+
+std::wstring BuildHourlyS1Url(const JmaStation& station, int year, int month, int day) {
+    std::wostringstream oss;
+    oss << L"https://www.data.jma.go.jp/obd/stats/etrn/view/hourly_s1.php?prec_no="
+        << station.prec_no << L"&block_no=" << station.block_no
+        << L"&year=" << year << L"&month=" << month << L"&day=" << day << L"&view=";
+    return oss.str();
+}
+
+JmaDailyResult ParseHourlyS1Html(
+    const std::string& html,
     const JmaStation& station,
-    int year, int month, int day,
-    bool& out_got_html,
-    const std::function<bool()>& should_cancel = nullptr
+    int year, int month, int day
 ) {
     JmaDailyResult result;
     result.station = station;
     result.year = year;
     result.month = month;
     result.day = day;
-    out_got_html = false;
-
-    if (should_cancel && should_cancel()) {
-        result.error_message = "照会がキャンセルされました。";
-        return result;
-    }
-
-    std::wostringstream oss;
-    oss << L"https://www.data.jma.go.jp/obd/stats/etrn/view/hourly_s1.php?prec_no="
-        << station.prec_no << L"&block_no=" << station.block_no
-        << L"&year=" << year << L"&month=" << month << L"&day=" << day << L"&view=";
-
-    std::string html = HttpTransport::GetString(oss.str(), should_cancel);
-    if (should_cancel && should_cancel()) {
-        result.error_message = "照会がキャンセルされました。";
-        return result;
-    }
-    if (html.empty()) {
-        result.success = false;
-        result.error_message = "気象庁の過去データ取得に失敗しました (通信エラーまたは接続拒否)。";
-        return result;
-    }
-    out_got_html = true;
 
     std::string lower_html = ToLowerAscii(html);
     size_t pos = 0;
@@ -756,11 +742,74 @@ JmaDailyResult FetchHourlyS1Internal(
     return result;
 }
 
+JmaDailyResult FetchHourlyS1Internal(
+    const JmaStation& station,
+    int year, int month, int day,
+    bool& out_got_html,
+    const std::function<bool()>& should_cancel = nullptr
+) {
+    JmaDailyResult result;
+    result.station = station;
+    result.year = year;
+    result.month = month;
+    result.day = day;
+    out_got_html = false;
+
+    if (should_cancel && should_cancel()) {
+        result.error_message = "照会がキャンセルされました。";
+        return result;
+    }
+
+    std::string html = HttpTransport::GetString(BuildHourlyS1Url(station, year, month, day), should_cancel);
+    if (should_cancel && should_cancel()) {
+        result.error_message = "照会がキャンセルされました。";
+        return result;
+    }
+    if (html.empty()) {
+        result.success = false;
+        result.error_message = "気象庁の過去データ取得に失敗しました (通信エラーまたは接続拒否)。";
+        return result;
+    }
+    out_got_html = true;
+
+    return ParseHourlyS1Html(html, station, year, month, day);
+}
+
 void CopyObsToHourly(const AmedasObs& obs, HourlyWeather& hw) {
     hw.temp = obs.temp;
     hw.humidity = obs.humidity;
     hw.station_press = obs.station_press;
     hw.sea_press = obs.sea_press;
+}
+
+std::vector<std::wstring> BuildAmedasPointUrls(
+    const JmaStation& station,
+    SimpleDate target_date,
+    SimpleDate latest_date,
+    int latest_hour,
+    bool past_day_mode
+) {
+    std::string ymd = FormatDateYmd(target_date);
+    std::vector<std::wstring> urls;
+    int max_hh3 = past_day_mode ? 21 : ((latest_hour / 3) * 3);
+    for (int hh3 = 0; hh3 <= max_hh3; hh3 += 3) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "https://www.jma.go.jp/bosai/amedas/data/point/%s/%s_%02d.json",
+            station.amedas_id, ymd.c_str(), hh3);
+        urls.push_back(ToWideAscii(buf));
+    }
+
+    SimpleDate next_date = AddDays(target_date, 1);
+    if (past_day_mode && CompareDate(next_date, latest_date) <= 0) {
+        std::string next_ymd = FormatDateYmd(next_date);
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "https://www.jma.go.jp/bosai/amedas/data/point/%s/%s_00.json",
+            station.amedas_id, next_ymd.c_str());
+        urls.push_back(ToWideAscii(buf));
+    }
+    return urls;
 }
 
 JmaDailyResult FetchAmedasPointForDateInternal(
@@ -784,25 +833,8 @@ JmaDailyResult FetchAmedasPointForDateInternal(
     out_has_recent_pressure = false;
 
     std::string ymd = FormatDateYmd(target_date);
-    std::vector<std::wstring> urls;
-    int max_hh3 = past_day_mode ? 21 : ((latest_hour / 3) * 3);
-    for (int hh3 = 0; hh3 <= max_hh3; hh3 += 3) {
-        char buf[160];
-        std::snprintf(buf, sizeof(buf),
-            "https://www.jma.go.jp/bosai/amedas/data/point/%s/%s_%02d.json",
-            station.amedas_id, ymd.c_str(), hh3);
-        urls.push_back(ToWideAscii(buf));
-    }
-
     SimpleDate next_date = AddDays(target_date, 1);
-    if (past_day_mode && CompareDate(next_date, latest_date) <= 0) {
-        std::string next_ymd = FormatDateYmd(next_date);
-        char buf[160];
-        std::snprintf(buf, sizeof(buf),
-            "https://www.jma.go.jp/bosai/amedas/data/point/%s/%s_00.json",
-            station.amedas_id, next_ymd.c_str());
-        urls.push_back(ToWideAscii(buf));
-    }
+    std::vector<std::wstring> urls = BuildAmedasPointUrls(station, target_date, latest_date, latest_hour, past_day_mode);
 
     std::vector<std::string> payloads = HttpTransport::GetStrings(urls, should_cancel);
     if (should_cancel && should_cancel()) {
@@ -925,6 +957,180 @@ JmaDailyResult FetchAmedasPointForDateInternal(
     return result;
 }
 
+std::vector<JmaStation> FindSpatialCandidateStations(double lat, double lon, size_t max_count) {
+    struct Ranked {
+        JmaStation stn;
+        double dist_km;
+    };
+    std::vector<Ranked> list;
+    list.reserve(154);
+    for (int i = 0; i < 154; ++i) {
+        if (!HasAmedasPressure(G_JMA_STATIONS[i])) {
+            continue;
+        }
+        double x = 0.0, y = 0.0, d = 0.0;
+        SpatialPressureCalculator::CalculateLocalCoordsKm(
+            lat, lon, G_JMA_STATIONS[i].lat, G_JMA_STATIONS[i].lon, x, y, d
+        );
+        if (std::isfinite(d) && d <= SpatialPressureCalculator::kDefaultMaxRadiusKm) {
+            list.push_back(Ranked{G_JMA_STATIONS[i], d});
+        }
+    }
+    std::sort(list.begin(), list.end(), [](const Ranked& a, const Ranked& b) {
+        return a.dist_km < b.dist_km;
+    });
+    if (list.size() > max_count) {
+        list.resize(max_count);
+    }
+    std::vector<JmaStation> result;
+    result.reserve(list.size());
+    for (const auto& item : list) {
+        result.push_back(item.stn);
+    }
+    return result;
+}
+
+NeighborStationSeries BuildSeriesFromHours(
+    const JmaStation& station,
+    const std::vector<HourlyWeather>& hours
+) {
+    NeighborStationSeries s;
+    s.station = station;
+    s.obs.reserve(hours.size());
+    for (const auto& h : hours) {
+        s.obs.push_back(NeighborTimeObs{h.hour, h.minute, h.sea_press, h.temp});
+    }
+    return s;
+}
+
+const NeighborTimeObs* FindObsAtTime(const NeighborStationSeries& series, int hour, int minute, size_t hint_idx) {
+    if (hint_idx < series.obs.size() &&
+        series.obs[hint_idx].hour == hour && series.obs[hint_idx].minute == minute) {
+        return &series.obs[hint_idx];
+    }
+    for (const auto& o : series.obs) {
+        if (o.hour == hour && o.minute == minute) {
+            return &o;
+        }
+    }
+    return nullptr;
+}
+
+void PopulateSpatialNeighborsInternal(
+    JmaDailyResult& res,
+    double lat,
+    double lon,
+    bool used_amedas_past_day_mode,
+    SimpleDate amedas_latest_date,
+    int amedas_latest_h,
+    const std::function<bool()>& should_cancel
+) {
+    res.target_lat = lat;
+    res.target_lon = lon;
+    res.has_target_coords = true;
+    res.neighbor_series.clear();
+
+    if (!res.success || res.hours.empty()) {
+        return;
+    }
+
+    if (HasAmedasPressure(res.station)) {
+        res.neighbor_series.push_back(BuildSeriesFromHours(res.station, res.hours));
+    }
+
+    std::vector<JmaStation> candidates = FindSpatialCandidateStations(lat, lon, kMaxSpatialFetchStations);
+    std::vector<JmaStation> to_fetch;
+    to_fetch.reserve(candidates.size());
+    for (const auto& stn : candidates) {
+        if (HasAmedasPressure(res.station) &&
+            std::strcmp(stn.amedas_id, res.station.amedas_id) == 0) {
+            continue;
+        }
+        to_fetch.push_back(stn);
+    }
+    if (to_fetch.empty()) {
+        return;
+    }
+
+    if (res.is_realtime) {
+        SimpleDate target_date{res.year, res.month, res.day};
+        SimpleDate next_date = AddDays(target_date, 1);
+        std::vector<std::wstring> all_urls;
+        std::vector<size_t> url_counts;
+        url_counts.reserve(to_fetch.size());
+
+        for (const auto& stn : to_fetch) {
+            std::vector<std::wstring> stn_urls = BuildAmedasPointUrls(
+                stn, target_date, amedas_latest_date, amedas_latest_h, used_amedas_past_day_mode
+            );
+            url_counts.push_back(stn_urls.size());
+            all_urls.insert(all_urls.end(), stn_urls.begin(), stn_urls.end());
+        }
+
+        std::vector<std::string> payloads = HttpTransport::GetStrings(all_urls, should_cancel);
+        if (should_cancel && should_cancel()) {
+            res.success = false;
+            res.error_message = "照会がキャンセルされました。";
+            return;
+        }
+
+        size_t offset = 0;
+        for (size_t i = 0; i < to_fetch.size(); ++i) {
+            size_t cnt = url_counts[i];
+            std::map<std::string, AmedasObs> obs_map;
+            for (size_t k = 0; k < cnt && offset + k < payloads.size(); ++k) {
+                if (!payloads[offset + k].empty()) {
+                    ParseAmedasPointJson(payloads[offset + k], obs_map);
+                }
+            }
+            offset += cnt;
+
+            NeighborStationSeries series;
+            series.station = to_fetch[i];
+            series.obs.reserve(res.hours.size());
+            bool any_valid = false;
+            for (const auto& hw : res.hours) {
+                std::string ts = (used_amedas_past_day_mode && hw.hour == 24)
+                    ? FormatTimestamp14(next_date, 0, 0)
+                    : FormatTimestamp14(target_date, hw.hour, hw.minute);
+                NeighborTimeObs item{hw.hour, hw.minute, -999.0, -999.0};
+                auto it = obs_map.find(ts);
+                if (it != obs_map.end()) {
+                    item.sea_press = it->second.sea_press;
+                    item.temp = it->second.temp;
+                    if (item.sea_press > 0.0 && item.temp > -900.0) {
+                        any_valid = true;
+                    }
+                }
+                series.obs.push_back(item);
+            }
+            if (any_valid) {
+                res.neighbor_series.push_back(std::move(series));
+            }
+        }
+    } else {
+        std::vector<std::wstring> urls;
+        urls.reserve(to_fetch.size());
+        for (const auto& stn : to_fetch) {
+            urls.push_back(BuildHourlyS1Url(stn, res.year, res.month, res.day));
+        }
+
+        std::vector<std::string> htmls = HttpTransport::GetStrings(urls, should_cancel);
+        if (should_cancel && should_cancel()) {
+            res.success = false;
+            res.error_message = "照会がキャンセルされました。";
+            return;
+        }
+
+        for (size_t i = 0; i < to_fetch.size() && i < htmls.size(); ++i) {
+            if (htmls[i].empty()) continue;
+            JmaDailyResult parsed = ParseHourlyS1Html(htmls[i], to_fetch[i], res.year, res.month, res.day);
+            if (!parsed.success || parsed.hours.empty()) continue;
+            res.neighbor_series.push_back(BuildSeriesFromHours(to_fetch[i], parsed.hours));
+        }
+    }
+}
+
 } // namespace
 
 JmaDailyResult JmaService::FetchDailyWeather(
@@ -1019,6 +1225,26 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
         ? ground_elevation_m
         : target_elevation_m;
 
+    auto finish_with_spatial = [&](
+        JmaDailyResult res,
+        bool used_amedas_past_day_mode,
+        SimpleDate amedas_latest_date,
+        int amedas_latest_h
+    ) -> JmaDailyResult {
+        if (!res.success) {
+            return res;
+        }
+        PopulateSpatialNeighborsInternal(
+            res, lat, lon,
+            used_amedas_past_day_mode, amedas_latest_date, amedas_latest_h,
+            should_cancel
+        );
+        if (res.success) {
+            RecalculatePressures(res, target_elevation_m);
+        }
+        return res;
+    };
+
     auto run_amedas_with_fallback = [&](SimpleDate latest_date, int latest_h, int latest_m, bool past_day_mode) -> JmaDailyResult {
         double nearest_all_dist = 0.0;
         JmaStation nearest_all = FindNearestStation(lat, lon, nearest_all_dist, false, effective_ground_elev);
@@ -1041,8 +1267,7 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
             res.distance_km = candidates[i].second;
             res.used_fallback_station = (std::strcmp(nearest_all.amedas_id, res.station.amedas_id) != 0);
             if (res.success && has_recent_press) {
-                RecalculatePressures(res, target_elevation_m);
-                return res;
+                return finish_with_spatial(std::move(res), past_day_mode, latest_date, latest_h);
             }
             if (res.success && has_press && !has_soft_fallback) {
                 soft_fallback = res;
@@ -1054,8 +1279,7 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
             }
         }
         if (has_soft_fallback) {
-            RecalculatePressures(soft_fallback, target_elevation_m);
-            return soft_fallback;
+            return finish_with_spatial(std::move(soft_fallback), past_day_mode, latest_date, latest_h);
         }
         last_err.success = false;
         return last_err;
@@ -1114,10 +1338,40 @@ JmaDailyResult JmaService::FetchDailyWeatherForLocation(
         }
     }
 
-    if (res.success) {
-        RecalculatePressures(res, target_elevation_m);
+    return finish_with_spatial(std::move(res), false, SimpleDate{}, 0);
+}
+
+bool JmaService::CanReuseNeighborDataForLocation(
+    const JmaDailyResult& prev,
+    double new_lat,
+    double new_lon
+) {
+    if (!prev.success || prev.hours.empty() || !prev.has_target_coords) {
+        return false;
     }
-    return res;
+    std::vector<JmaStation> new_candidates = FindSpatialCandidateStations(new_lat, new_lon, kMaxSpatialFetchStations);
+    for (const auto& c : new_candidates) {
+        bool found = false;
+        for (const auto& ns : prev.neighbor_series) {
+            if (std::strcmp(c.amedas_id, ns.station.amedas_id) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+const HourlyWeather* JmaService::FindLatestValidSpatialHour(const JmaDailyResult& result) {
+    for (size_t i = result.hours.size(); i-- > 0;) {
+        if (result.hours[i].spatial.valid) {
+            return &result.hours[i];
+        }
+    }
+    return nullptr;
 }
 
 void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elevation_m) {
@@ -1161,28 +1415,80 @@ void JmaService::RecalculatePressures(JmaDailyResult& result, double target_elev
         return -999.0;
     };
 
+    std::vector<SpatialStationInput> spatial_inputs;
+    spatial_inputs.reserve(result.neighbor_series.size());
+
     for (size_t i = 0; i < n; ++i) {
         auto& hw = result.hours[i];
         double effective_temp = get_effective_temp(i);
         // 海面基準気温 T0 = T_obs + 0.0065 * h_stn (全時刻欠測時のみ 15.0℃)
         double sea_temp_c = (effective_temp > -900.0) ? (effective_temp + L * result.station.alt) : 15.0;
 
+        hw.single_target_press = -999.0;
         hw.target_press = -999.0;
         hw.press_diff = 0.0;
         hw.has_press_diff = false;
+        hw.spatial_correction = 0.0;
+        hw.has_spatial_correction = false;
+        hw.spatial = SpatialPressureResult{};
 
-        // 現在地標高での気圧換算 (実測値である現地気圧＋官署標高からの直接換算を第一優先とし、現地気圧欠損時は海面気圧から換算)
+        // 1. 従来の最寄り単点観測所からの現地気圧換算
         if (hw.station_press > 0.0) {
-            hw.target_press = CalculatePressureFromStation(
+            hw.single_target_press = CalculatePressureFromStation(
                 hw.station_press, result.station.alt, sea_temp_c, target_elevation_m
             );
         } else if (hw.sea_press > 0.0) {
-            hw.target_press = CalculatePressureFromSeaLevel(hw.sea_press, sea_temp_c, target_elevation_m);
+            hw.single_target_press = CalculatePressureFromSeaLevel(hw.sea_press, sea_temp_c, target_elevation_m);
         }
 
-        if (hw.target_press > 0.0 && hw.sea_press > 0.0) {
-            hw.press_diff = hw.target_press - hw.sea_press;
-            hw.has_press_diff = true;
+        // 2. 山岳単点ガード（過去日照会時に富士山など海面気圧非公開の至近官署が現地気圧を直接持つ場合）
+        bool mountain_direct_guard = (
+            !result.is_realtime &&
+            result.distance_km < 5.0 &&
+            std::fabs(target_elevation_m - result.station.alt) < 500.0 &&
+            hw.station_press > 0.0 &&
+            hw.sea_press <= -900.0
+        );
+
+        // 3. 複数観測所の空間補間パイプライン (Step 1〜3)
+        if (!mountain_direct_guard && result.has_target_coords && !result.neighbor_series.empty()) {
+            spatial_inputs.clear();
+            for (const auto& ns : result.neighbor_series) {
+                const NeighborTimeObs* obs = FindObsAtTime(ns, hw.hour, hw.minute, i);
+                if (!obs || obs->sea_press <= 0.0 || obs->temp <= -900.0) continue;
+                SpatialStationInput inp;
+                inp.amedas_id = ns.station.amedas_id;
+                inp.name = ns.station.name;
+                inp.lat = ns.station.lat;
+                inp.lon = ns.station.lon;
+                inp.alt_m = ns.station.alt;
+                inp.sea_level_pressure = obs->sea_press;
+                inp.temp_c = obs->temp;
+                spatial_inputs.push_back(std::move(inp));
+            }
+            if (!spatial_inputs.empty()) {
+                hw.spatial = SpatialPressureCalculator::Evaluate(
+                    result.target_lat, result.target_lon, target_elevation_m, spatial_inputs
+                );
+            }
+        }
+
+        if (hw.spatial.valid) {
+            hw.target_press = hw.spatial.local_pressure;
+            if (hw.single_target_press > 0.0) {
+                hw.spatial_correction = hw.target_press - hw.single_target_press;
+                hw.has_spatial_correction = true;
+            }
+            if (hw.spatial.interpolated_sea_level_pressure > 0.0) {
+                hw.press_diff = hw.target_press - hw.spatial.interpolated_sea_level_pressure;
+                hw.has_press_diff = true;
+            }
+        } else {
+            hw.target_press = hw.single_target_press;
+            if (hw.target_press > 0.0 && hw.sea_press > 0.0) {
+                hw.press_diff = hw.target_press - hw.sea_press;
+                hw.has_press_diff = true;
+            }
         }
 
         if (hw.target_press <= -900.0) {

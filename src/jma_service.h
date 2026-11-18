@@ -4,6 +4,7 @@
 #include <utility>
 #include <functional>
 #include "jma_stations.h"
+#include "spatial_pressure.h"
 
 struct HourlyWeather {
     int hour = 0;                  // 過去日: 1〜24, 当日: 0〜23
@@ -12,9 +13,13 @@ struct HourlyWeather {
     double humidity = -999.0;      // 湿度 (％)
     double station_press = -999.0; // 観測所現地気圧 (hPa)
     double sea_press = -999.0;     // 海面気圧 (hPa)
-    double target_press = -999.0;  // 現在地標高での換算気圧 (hPa)
-    double press_diff = 0.0;       // 海面気圧との差 (target - sea)
+    double single_target_press = -999.0; // 最寄り1官署のみでの換算気圧 (hPa)
+    double target_press = -999.0;  // 現在地標高での換算気圧 (空間補間適用後, hPa)
+    double press_diff = 0.0;       // 海面気圧との差 (target - interpolated P0 または sea_press)
     bool has_press_diff = false;   // 海面気圧が存在し気圧差を算出できたか
+    double spatial_correction = 0.0; // 空間補間補正値 (target_press - single_target_press)
+    bool has_spatial_correction = false;
+    SpatialPressureResult spatial; // 該当時刻の空間補間結果・診断メタデータ
     std::string weather;           // 天候 (晴れ, 曇, 雨 等; 当日AMeDASは "-")
 
     std::string FormatTimeHHMM() const;
@@ -30,6 +35,18 @@ struct PressureStats {
     std::string max_time;
 };
 
+struct NeighborTimeObs {
+    int hour = 0;
+    int minute = 0;
+    double sea_press = -999.0;
+    double temp = -999.0;
+};
+
+struct NeighborStationSeries {
+    JmaStation station;
+    std::vector<NeighborTimeObs> obs;
+};
+
 struct JmaDailyResult {
     bool success = false;
     bool is_realtime = false;      // true: AMeDAS JSON (当日速報等), false: hourly_s1.php
@@ -41,10 +58,14 @@ struct JmaDailyResult {
     std::string error_message;
     JmaStation station;
     double distance_km = 0.0;
+    double target_lat = 0.0;
+    double target_lon = 0.0;
+    bool has_target_coords = false;
     int year = 0;
     int month = 0;
     int day = 0;
     std::vector<HourlyWeather> hours; // 過去日: 01:00〜24:00, 当日: 00:00〜最新
+    std::vector<NeighborStationSeries> neighbor_series; // 空間補間用 周辺観測所時系列
 };
 
 class JmaService {
@@ -80,7 +101,7 @@ public:
         const std::function<bool()>& should_cancel = nullptr
     );
 
-    // 現在地座標から指定日の気象データを取得（当日・直近日のAMeDAS切替および観測所フォールバック対応）
+    // 現在地座標から指定日の気象データを取得（当日・直近日のAMeDAS切替、観測所フォールバック、空間補間対応）
     static JmaDailyResult FetchDailyWeatherForLocation(
         double lat, double lon,
         int year, int month, int day,
@@ -89,8 +110,18 @@ public:
         double ground_elevation_m = -9999.0
     );
 
-    // 既に取得済みの観測結果に対し、指定標高（地盤標高 + 地上高）で換算気圧を再計算
+    // 位置微修正時に、既存の周辺観測所データを再利用して空間補間のみ再計算可能か判定
+    static bool CanReuseNeighborDataForLocation(
+        const JmaDailyResult& prev,
+        double new_lat,
+        double new_lon
+    );
+
+    // 既に取得済みの観測結果に対し、指定標高（地盤標高 + 地上高）で換算気圧・空間補間を再計算
     static void RecalculatePressures(JmaDailyResult& result, double target_elevation_m);
+
+    // 有効な最新時刻（または最終時刻）の空間補間結果を取得
+    static const HourlyWeather* FindLatestValidSpatialHour(const JmaDailyResult& result);
 
     // 換算気圧の統計情報（最新・最高・最低）を計算
     static PressureStats ComputePressureStats(const JmaDailyResult& result);

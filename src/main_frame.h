@@ -61,6 +61,7 @@ private:
         int map_h = 320;
 
         bool have_prev_station = false;
+        bool can_reuse_spatial_neighbors = false;
         std::string prev_prec_no;
         std::string prev_block_no;
         int prev_year = 0;
@@ -135,6 +136,7 @@ private:
     double ReadSpinHeightAgl(bool commit_text);
     void ApplyHeightAglValue(double new_height);
 
+    void AttachPrevStationSnapshot(WorkerJob& job, double new_lat, double new_lon) const;
     void EnqueueJob(WorkerJob job);
     void WorkerLoop();
     void ApplyWorkerResult(const WorkerResult& res);
@@ -152,6 +154,7 @@ private:
     void UpdateElevationLabel();
     void UpdateAddressLabel();
     void UpdateStationLabels();
+    void UpdateSpatialSummaryLabel();
     void UpdatePressureSummaryLabel();
     void UpdateStatusBarInfo(const wxString& mainText, bool updateRightPane = true);
     void ClearWeatherSummaryUi();
@@ -202,6 +205,7 @@ private:
     wxStaticText* m_lblElevation;
     wxStaticText* m_lblStation;
     wxStaticText* m_lblDistance;
+    wxStaticText* m_lblSpatialSummary;
     wxStaticText* m_lblPressureSummary;
 
     // 最新の取得結果と元住所保持状態

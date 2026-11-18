@@ -22,12 +22,14 @@ STATIC_FLAGS = -static -static-libgcc -static-libstdc++ -mwindows
 CORE_SRCS = src/gsi_service.cpp \
             src/jma_service.cpp \
             src/jma_stations.cpp \
+            src/spatial_pressure.cpp \
             src/http_transport.cpp \
             src/preset_store.cpp
 
 CORE_HDRS = src/gsi_service.h \
             src/jma_service.h \
             src/jma_stations.h \
+            src/spatial_pressure.h \
             src/http_transport.h \
             src/preset_store.h
 

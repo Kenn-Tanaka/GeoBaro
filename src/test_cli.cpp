@@ -290,6 +290,105 @@ int main() {
     std::cout << "空白区切り座標 ＆ 気圧統計テストOK (最新=" << stats.latest_press
               << ", 最高=" << stats.max_press << ", 最低=" << stats.min_press << ")" << std::endl;
 
+    // 13. 空間補間モジュール (Step 1〜3) 決定論的単体テスト
+    std::cout << "\n[13] 空間補間アルゴリズム (PlaneFit/IDW/SingleNearest) 単体テスト..." << std::endl;
+    {
+        const double t_lat = 35.6800;
+        const double t_lon = 139.7500;
+        const double cos_lat = std::cos(t_lat * 3.14159265358979323846 / 180.0);
+        auto offset_station = [&](const char* id, const char* nm, double dx_km, double dy_km, double alt_m, double p0, double temp_c) {
+            SpatialStationInput s;
+            s.amedas_id = id;
+            s.name = nm;
+            s.lon = t_lon + dx_km / (111.32 * cos_lat);
+            s.lat = t_lat + dy_km / 110.57;
+            s.alt_m = alt_m;
+            s.sea_level_pressure = p0;
+            s.temp_c = temp_c;
+            return s;
+        };
+
+        // 13a. 線形気圧傾度場 P(x, y) = 1012.0 + 0.04 * x - 0.03 * y を 6点から厳密復元 (PlaneFit)
+        std::vector<SpatialStationInput> plane_pts = {
+            offset_station("1", "East",  20.0,  10.0, 10.0, 1012.0 + 0.04 * 20.0 - 0.03 * 10.0, 20.0 - 0.0065 * 10.0),
+            offset_station("2", "West", -25.0,   5.0, 20.0, 1012.0 + 0.04 * (-25.0) - 0.03 * 5.0, 20.0 - 0.0065 * 20.0),
+            offset_station("3", "North",  5.0,  30.0, 50.0, 1012.0 + 0.04 * 5.0 - 0.03 * 30.0, 20.0 - 0.0065 * 50.0),
+            offset_station("4", "South", -8.0, -22.0,  5.0, 1012.0 + 0.04 * (-8.0) - 0.03 * (-22.0), 20.0 - 0.0065 * 5.0),
+            offset_station("5", "NE",    40.0,  35.0, 30.0, 1012.0 + 0.04 * 40.0 - 0.03 * 35.0, 20.0 - 0.0065 * 30.0),
+            offset_station("6", "SW",   -35.0, -30.0, 40.0, 1012.0 + 0.04 * (-35.0) - 0.03 * (-30.0), 20.0 - 0.0065 * 40.0),
+            // 100km圏外および欠測は除外されること
+            offset_station("7", "Far",   120.0,  0.0, 10.0, 1030.0, 15.0),
+            offset_station("8", "NullP",   2.0,  2.0, 10.0, -999.0, 15.0)
+        };
+        SpatialPressureResult r_plane = SpatialPressureCalculator::Evaluate(t_lat, t_lon, 100.0, plane_pts);
+        assert(r_plane.valid);
+        assert(r_plane.method_used == SpatialInterpMethod::PlaneFit);
+        assert(r_plane.has_gradient);
+        assert(r_plane.stations_used.size() == 6);
+        assert(std::abs(r_plane.interpolated_sea_level_pressure - 1012.0) < 1e-4);
+        assert(std::abs(r_plane.pressure_gradient_x - 0.04) < 1e-4);
+        assert(std::abs(r_plane.pressure_gradient_y - (-0.03)) < 1e-4);
+        assert(std::abs(r_plane.estimated_temp - (20.0 - 0.0065 * 100.0)) < 1e-3);
+        double expected_local = 1012.0 * std::pow((r_plane.estimated_temp + 273.15) / (r_plane.estimated_temp + 273.15 + 0.0065 * 100.0), 5.257);
+        assert(std::abs(r_plane.local_pressure - expected_local) < 1e-4);
+
+        // 13b. 共線（一直線）配置の 4点は IDW にフォールバックすること
+        std::vector<SpatialStationInput> collinear_pts = {
+            offset_station("1", "L1", 10.0, 20.0, 0.0, 1011.0, 18.0),
+            offset_station("2", "L2", 20.0, 40.0, 0.0, 1012.0, 18.0),
+            offset_station("3", "L3", -10.0, -20.0, 0.0, 1009.0, 18.0),
+            offset_station("4", "L4", -25.0, -50.0, 0.0, 1008.0, 18.0)
+        };
+        SpatialPressureResult r_col = SpatialPressureCalculator::Evaluate(t_lat, t_lon, 0.0, collinear_pts);
+        assert(r_col.valid && r_col.method_used == SpatialInterpMethod::IDW && !r_col.has_gradient);
+
+        // 13c. 3点以下で d_i < 0.1km が存在する場合は IDW かつその点の海面気圧をそのまま採用
+        std::vector<SpatialStationInput> idw_near_pts = {
+            offset_station("1", "Here", 0.03, 0.02, 10.0, 1015.4, 20.0),
+            offset_station("2", "Adj1", 20.0, 0.0, 10.0, 1010.0, 20.0),
+            offset_station("3", "Adj2", 0.0, 25.0, 10.0, 1011.0, 20.0)
+        };
+        SpatialPressureResult r_near = SpatialPressureCalculator::Evaluate(t_lat, t_lon, 0.0, idw_near_pts);
+        assert(r_near.valid && r_near.method_used == SpatialInterpMethod::IDW);
+        assert(std::abs(r_near.interpolated_sea_level_pressure - 1015.4) < 1e-6);
+
+        // 13d. 1点のみの場合は SingleNearest
+        std::vector<SpatialStationInput> single_pts = {
+            offset_station("1", "Solo", 15.0, 15.0, 20.0, 1013.0, 16.0)
+        };
+        SpatialPressureResult r_single = SpatialPressureCalculator::Evaluate(t_lat, t_lon, 0.0, single_pts);
+        assert(r_single.valid && r_single.method_used == SpatialInterpMethod::SingleNearest);
+        assert(std::abs(r_single.interpolated_sea_level_pressure - 1013.0) < 1e-6);
+
+        std::cout << "空間補間単体テストOK (PlaneFit P0=" << r_plane.interpolated_sea_level_pressure
+                  << " hPa, grad=(" << r_plane.pressure_gradient_x << ", " << r_plane.pressure_gradient_y << "))" << std::endl;
+    }
+
+    // 14. 実通信データでの空間補間統合検証（過去日・当日・再計算再利用）
+    std::cout << "\n[14] 実通信 空間補間統合テスト..." << std::endl;
+    {
+        JmaDailyResult past_spatial = JmaService::FetchDailyWeatherForLocation(
+            loc.lat, loc.lon, 2024, 5, 1, loc.elevation, nullptr, loc.elevation
+        );
+        assert(past_spatial.success && !past_spatial.hours.empty());
+        const HourlyWeather* sp_past = JmaService::FindLatestValidSpatialHour(past_spatial);
+        assert(sp_past != nullptr && sp_past->spatial.valid);
+        assert(sp_past->spatial.method_used == SpatialInterpMethod::PlaneFit);
+        assert(sp_past->spatial.stations_used.size() == 6);
+        assert(sp_past->has_spatial_correction);
+        assert(JmaService::CanReuseNeighborDataForLocation(past_spatial, loc.lat + 0.005, loc.lon + 0.005));
+
+        const HourlyWeather* sp_today = JmaService::FindLatestValidSpatialHour(today_res);
+        assert(sp_today != nullptr && sp_today->spatial.valid);
+        assert(sp_today->spatial.stations_used.size() >= 4);
+        std::cout << "実通信空間補間OK (2024-05-01 手法="
+                  << SpatialPressureCalculator::MethodToString(sp_past->spatial.method_used)
+                  << ", 使用=" << sp_past->spatial.stations_used.size()
+                  << "点, 補正=" << sp_past->spatial_correction << " hPa / 当日手法="
+                  << SpatialPressureCalculator::MethodToString(sp_today->spatial.method_used)
+                  << ", 使用=" << sp_today->spatial.stations_used.size() << "点)" << std::endl;
+    }
+
     std::cout << "\n全テスト項目正常終了。" << std::endl;
     return 0;
 }
