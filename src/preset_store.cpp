@@ -1,5 +1,6 @@
 #include "preset_store.h"
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <windows.h>
@@ -97,12 +98,15 @@ std::vector<PresetLocation> PresetStore::Deserialize(const std::string& content)
             p.lon = std::stod(fields[5]);
             p.base_lat = std::stod(fields[6]);
             p.base_lon = std::stod(fields[7]);
-            p.height_agl_m = std::clamp(std::stod(fields[8]), 0.0, 2000.0);
+            p.height_agl_m = std::stod(fields[8]);
             p.zoom = std::clamp(std::stoi(fields[9]), 10, 18);
 
-            if (!p.name.empty() &&
-                p.lat >= -85.051128 && p.lat <= 85.051128 &&
-                p.lon >= -180.0 && p.lon <= 180.0) {
+            auto valid_coords = [](double lat, double lon) {
+                return lat >= -85.051128 && lat <= 85.051128 && lon >= -180.0 && lon <= 180.0;
+            };
+            if (!p.name.empty() && valid_coords(p.lat, p.lon) && valid_coords(p.base_lat, p.base_lon) &&
+                std::isfinite(p.height_agl_m)) {
+                p.height_agl_m = std::clamp(p.height_agl_m, kMinHeightAglM, kMaxHeightAglM);
                 result.push_back(std::move(p));
             }
         } catch (...) {

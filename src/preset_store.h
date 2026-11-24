@@ -3,6 +3,9 @@
 #include <vector>
 #include <filesystem>
 
+inline constexpr double kMinHeightAglM = -2000.0;
+inline constexpr double kMaxHeightAglM = 2000.0;
+
 struct PresetLocation {
     std::string name;
     std::string input_text;

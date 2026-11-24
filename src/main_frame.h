@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <string>
 #include "gsi_service.h"
@@ -67,6 +68,7 @@ private:
         int prev_year = 0;
         int prev_month = 0;
         int prev_day = 0;
+        double reused_archive_distance_km = 0.0;
     };
 
     struct WorkerResult {
@@ -132,7 +134,7 @@ private:
     void StartWeatherOnlySearch();
     void ShiftTargetDate(int delta_days);
     void UpdateDateNavButtons();
-    void SetSearchBusy(bool busy);
+    void SetSearchBusy(bool busy, bool lock_height = false);
     double ReadSpinHeightAgl(bool commit_text);
     void ApplyHeightAglValue(double new_height);
 
@@ -168,6 +170,7 @@ private:
     const PresetLocation* GetSelectedPreset() const;
     void LoadPresets();
     bool SavePresets(std::vector<PresetLocation> updated);
+    void RememberFirstSearchInputs();
     void RestoreDisplayedInputs();
     void RefreshPresetChoice(int select_preset_index = -1);
 
@@ -189,6 +192,14 @@ private:
     wxButton* m_btnExport;
     wxButton* m_btnCopyList;
     bool m_suppressDateEvent = false;
+    struct SearchInputs {
+        wxString location;
+        double height_agl_m;
+        int zoom;
+        int layer;
+        wxDateTime date;
+    };
+    std::optional<SearchInputs> m_inputsBeforeFirstSearch;
 
     // 地図コントロール
     MapPanel* m_mapPanel;

@@ -232,9 +232,9 @@ void MainFrame::InitUi() {
     inputRow->Add(m_txtLocation, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
 
     inputRow->Add(new wxStaticText(rootPanel, wxID_ANY, wxT("地上高(m):")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
-    m_spinHeightAgl = new wxSpinCtrlDouble(rootPanel, ID_SPIN_HEIGHT_AGL, wxT("0.0"), wxDefaultPosition, FromDIP(wxSize(82, -1)), wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER, 0.0, 2000.0, 0.0, 1.0);
+    m_spinHeightAgl = new wxSpinCtrlDouble(rootPanel, ID_SPIN_HEIGHT_AGL, wxT("0.0"), wxDefaultPosition, FromDIP(wxSize(82, -1)), wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER, kMinHeightAglM, kMaxHeightAglM, 0.0, 1.0);
     m_spinHeightAgl->SetDigits(1);
-    m_spinHeightAgl->SetToolTip(wxT("建物の高層階など、地表面からの高さ(m)を指定します（Enterで即時再計算）"));
+    m_spinHeightAgl->SetToolTip(wxT("地盤からの高さ。地下は負の値を入力し、Enterで再計算します。"));
     m_spinHeightAgl->Bind(wxEVT_TEXT_ENTER, &MainFrame::OnHeightAglEnter, this);
     inputRow->Add(m_spinHeightAgl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
 
@@ -437,10 +437,11 @@ void MainFrame::EnqueueJob(WorkerJob job) {
     m_jobCv.notify_one();
 }
 
-void MainFrame::SetSearchBusy(bool busy) {
+void MainFrame::SetSearchBusy(bool busy, bool lock_height) {
     if (!m_btnSearch) return;
     m_btnAddPreset->Enable(!busy);
     m_btnDelPreset->Enable(!busy && GetSelectedPreset());
+    m_spinHeightAgl->Enable(!busy || !lock_height);
     if (busy) SetExportControlsEnabled(false);
     if (busy) {
         m_btnSearch->SetLabel(wxT("中止"));
@@ -457,7 +458,7 @@ double MainFrame::ReadSpinHeightAgl(bool commit_text) {
     wxString txt = m_spinHeightAgl->GetTextValue().Trim().Trim(false);
     double val = 0.0;
     if (txt.ToDouble(&val) && std::isfinite(val)) {
-        val = std::clamp(val, 0.0, 2000.0);
+        val = std::clamp(val, kMinHeightAglM, kMaxHeightAglM);
         if (commit_text) {
             m_spinHeightAgl->SetValue(val);
         }
@@ -621,6 +622,7 @@ void MainFrame::OnSearch(wxCommandEvent& event) {
         return;
     }
 
+    RememberFirstSearchInputs();
     m_zoomTimer.Stop();
     wxDateTime date = m_datePicker->GetValue();
     wxSize mapSz = GetCurrentMapSize();
@@ -650,7 +652,7 @@ void MainFrame::OnSearch(wxCommandEvent& event) {
         job.is_fine_tuned = true;
     }
 
-    SetSearchBusy(true);
+    SetSearchBusy(true, !job.preset_name.empty());
     SetExportControlsEnabled(false);
     UpdateStatusBarInfo(wxT("国土地理院および気象庁からデータを取得しています..."), false);
 
@@ -776,7 +778,8 @@ void MainFrame::AttachPrevStationSnapshot(WorkerJob& job, double new_lat, double
         job.prev_year = m_lastJma.year;
         job.prev_month = m_lastJma.month;
         job.prev_day = m_lastJma.day;
-        job.can_reuse_spatial_neighbors = JmaService::CanReuseNeighborDataForLocation(m_lastJma, new_lat, new_lon);
+        job.can_reuse_spatial_neighbors = JmaService::CanReuseNeighborDataForLocation(
+            m_lastJma, new_lat, new_lon, &job.reused_archive_distance_km);
     }
 }
 
@@ -917,9 +920,9 @@ void MainFrame::WorkerLoop() {
                     if (job.have_prev_station &&
                         job.can_reuse_spatial_neighbors &&
                         job.prev_year == job.year && job.prev_month == job.month && job.prev_day == job.day &&
-                        stn.prec_no == job.prev_prec_no && stn.block_no == job.prev_block_no) {
+                        (job.year < 1961 || (stn.prec_no == job.prev_prec_no && stn.block_no == job.prev_block_no))) {
                         res.reuse_existing_jma = true;
-                        res.new_distance_km = dist;
+                        res.new_distance_km = job.year < 1961 ? job.reused_archive_distance_km : dist;
                     } else {
                         res.jma_res = JmaService::FetchDailyWeatherForLocation(
                             job.lat, job.lon, job.year, job.month, job.day,
@@ -1106,8 +1109,10 @@ void MainFrame::ApplyWorkerResult(const WorkerResult& res) {
     }
 
     // JobKind::FullSearch
+    m_inputsBeforeFirstSearch.reset();
     m_lastPresetName = res.loc.success ? res.preset_name : std::string();
     if (res.loc.success) {
+        if (!res.preset_name.empty()) m_spinHeightAgl->SetValue(res.height_agl_m);
         m_baseInputText = res.base_input_text;
         m_baseAddress = res.base_address;
         m_baseLat = res.base_lat;
@@ -1145,9 +1150,9 @@ void MainFrame::UpdateElevationLabel() {
     } else {
         double total_alt = m_lastLoc.elevation + m_lastHeightAgl;
         wxString text;
-        if (m_lastHeightAgl > 0.0) {
+        if (m_lastHeightAgl != 0.0) {
             text = wxString::Format(
-                wxT("地盤 %.1f m + 地上高 %.1f m = 海抜 %.1f m (%s)"),
+                wxT("地盤 %.1f m / 地上高 %+.1f m / 海抜 %.1f m (%s)"),
                 m_lastLoc.elevation, m_lastHeightAgl, total_alt, wxString::FromUTF8(m_lastLoc.hsrc));
         } else {
             text = wxString::Format(
@@ -1528,6 +1533,12 @@ bool MainFrame::SavePresets(std::vector<PresetLocation> updated) {
     return true;
 }
 
+void MainFrame::RememberFirstSearchInputs() {
+    if (m_lastLoc.success || m_inputsBeforeFirstSearch) return;
+    m_inputsBeforeFirstSearch = SearchInputs{m_txtLocation->GetValue(), ReadSpinHeightAgl(false),
+        m_currentZoom, m_choiceLayer->GetSelection(), m_datePicker->GetValue()};
+}
+
 void MainFrame::RestoreDisplayedInputs() {
     int selection = 0;
     for (size_t i = 0; i < m_presets.size(); ++i) {
@@ -1535,14 +1546,29 @@ void MainFrame::RestoreDisplayedInputs() {
     }
     m_choicePreset->SetSelection(selection);
     m_btnDelPreset->Enable(selection > 0);
-    if (!m_lastLoc.success) return;
-    m_spinHeightAgl->SetValue(m_lastHeightAgl);
-    m_txtLocation->ChangeValue(m_isFineTuned ? m_fineTunedCoordText : wxString::FromUTF8(m_baseInputText));
-    m_currentZoom = m_mapPanel->GetCurrentTileZoom();
+    wxDateTime date;
+    if (m_lastLoc.success) {
+        m_spinHeightAgl->SetValue(m_lastHeightAgl);
+        m_txtLocation->ChangeValue(m_isFineTuned ? m_fineTunedCoordText : wxString::FromUTF8(m_baseInputText));
+        m_currentZoom = m_mapPanel->GetCurrentTileZoom();
+        const auto& layer = m_mapPanel->GetCurrentTileLayer();
+        m_choiceLayer->SetSelection(layer == "pale" ? 1 : (layer == "relief" ? 2 : 0));
+        if (m_lastJma.success) {
+            date = wxDateTime(m_lastJma.day, static_cast<wxDateTime::Month>(m_lastJma.month - 1), m_lastJma.year);
+        }
+    } else if (m_inputsBeforeFirstSearch) {
+        const auto& inputs = *m_inputsBeforeFirstSearch;
+        m_txtLocation->ChangeValue(inputs.location);
+        m_spinHeightAgl->SetValue(inputs.height_agl_m);
+        m_currentZoom = inputs.zoom;
+        m_choiceLayer->SetSelection(inputs.layer);
+        date = inputs.date;
+    }
+    m_inputsBeforeFirstSearch.reset();
     UpdateZoomControls();
-    if (m_lastJma.success) {
+    if (date.IsValid()) {
         m_suppressDateEvent = true;
-        m_datePicker->SetValue(wxDateTime(m_lastJma.day, static_cast<wxDateTime::Month>(m_lastJma.month - 1), m_lastJma.year));
+        m_datePicker->SetValue(date);
         m_suppressDateEvent = false;
         UpdateDateNavButtons();
     }
@@ -1553,7 +1579,7 @@ void MainFrame::RefreshPresetChoice(int select_choice_index) {
     m_choicePreset->Append(wxT("(登録地点を選択...)"));
     for (const auto& p : m_presets) {
         wxString label = wxString::FromUTF8(p.name);
-        if (p.height_agl_m > 0.0) {
+        if (p.height_agl_m != 0.0) {
             label += wxString::Format(wxT(" [地上高 %.1fm]"), p.height_agl_m);
         }
         m_choicePreset->Append(label);
@@ -1574,6 +1600,7 @@ void MainFrame::OnPresetSelected(wxCommandEvent& WXUNUSED(event)) {
     }
 
     const PresetLocation p = m_presets[static_cast<size_t>(sel - 1)];
+    RememberFirstSearchInputs();
     m_zoomTimer.Stop();
 
     m_spinHeightAgl->SetValue(p.height_agl_m);
@@ -1613,7 +1640,7 @@ void MainFrame::OnPresetSelected(wxCommandEvent& WXUNUSED(event)) {
 
     m_dataJobInFlight = true;
     m_activeDataKind = JobKind::FullSearch;
-    SetSearchBusy(true);
+    SetSearchBusy(true, true);
     SetExportControlsEnabled(false);
     UpdateStatusBarInfo(wxString::Format(wxT("プリセット「%s」を読み込んでいます..."), wxString::FromUTF8(p.name)), false);
 
@@ -1628,7 +1655,7 @@ void MainFrame::OnAddPreset(wxCommandEvent& WXUNUSED(event)) {
 
     double cur_height = ReadSpinHeightAgl(true);
     wxString defaultName = wxString::FromUTF8(m_baseAddress.empty() ? m_lastLoc.resolved_address : m_baseAddress);
-    if (cur_height > 0.0) {
+    if (cur_height != 0.0) {
         defaultName += wxString::Format(wxT(" (%.0fm)"), cur_height);
     }
 

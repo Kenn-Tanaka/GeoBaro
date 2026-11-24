@@ -52,7 +52,7 @@ struct JmaDailyResult {
     bool is_realtime = false;      // true: AMeDAS JSON (当日速報等), false: hourly_s1.php
     bool has_chunk_error = false;       // 一部3時間チャンクの取得に失敗したか
     bool has_missing_pressure = false;  // 表示行の中に換算気圧が欠測の行があるか
-    bool used_fallback_station = false; // 気圧非対応/連続欠測により代替官署を使用したか
+    bool used_fallback_station = false; // 気圧非対応や欠測により代替官署を使用したか
     bool has_large_alt_diff = false;    // 現在地と官署の標高差が大きく(1000m以上)外挿誤差に注意が必要か
     std::string latest_time_str;   // 例: "18:40" (is_realtime時)
     std::string error_message;
@@ -66,6 +66,8 @@ struct JmaDailyResult {
     int day = 0;
     std::vector<HourlyWeather> hours; // 過去日: 01:00〜24:00, 当日: 00:00〜最新
     std::vector<NeighborStationSeries> neighbor_series; // 空間補間用 周辺観測所時系列
+    std::vector<std::string> attempted_neighbor_blocks; // 欠測や通信失敗を含む取得試行済み官署
+    std::vector<std::string> attempted_archive_blocks; // 1960年以前の主官署探索で試した順序
 };
 
 class JmaService {
@@ -114,7 +116,8 @@ public:
     static bool CanReuseNeighborDataForLocation(
         const JmaDailyResult& prev,
         double new_lat,
-        double new_lon
+        double new_lon,
+        double* archive_distance_km = nullptr
     );
 
     // 既に取得済みの観測結果に対し、指定標高（地盤標高 + 地上高）で換算気圧・空間補間を再計算
