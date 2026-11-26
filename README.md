@@ -91,7 +91,7 @@ test_cli.exe
 * `src/gsi_service.h` / `src/gsi_service.cpp`: 国土地理院 住所検索API・標高API・Webメルカトル座標変換・LRUキャッシュ付きタイル取得ロジック
 * `src/preset_store.h` / `src/preset_store.cpp`: 現在地プリセットのシリアライズ・管理ロジック
 * `src/resource.rc`: Windows アプリケーションアイコンおよび Common Controls v6 / PerMonitorV2 DPI Awareness マニフェスト定義
-* `icons/GeoBaro.ico`: アプリケーション用アイコンファイル（アネロイド気圧計・コンパス合成デザイン）
+* `icons/GeoBaro-v2.ico`: 日本列島とアネロイド気圧計の改訂版アイコン（16〜256 pxの7サイズ）。旧版は `icons/GeoBaro.ico` に収録。
 * `src/jma_service.h` / `src/jma_service.cpp`: 気象庁過去データ検索HTMLパーサー・最寄り地点探索・周辺観測所バッチ取得・測高気圧換算
 * `src/spatial_pressure.h` / `src/spatial_pressure.cpp`: 複数観測所の空間補間（重み付き最小二乗平面近似・IDW・測高換算）による局所気圧算出モジュール
 * `src/jma_stations.h` / `src/jma_stations.cpp`: 全155地点の気象官署マスターテーブル
@@ -109,7 +109,7 @@ test_cli.exe
 
 ### ソフトウェアおよびアイコンのライセンス（MIT License）
 
-* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/GeoBaro.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
+* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/GeoBaro-v2.ico`、`icons/GeoBaro.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
 * 静的リンクされた単一バイナリ（`GeoBaro.exe`）には wxWidgets、libpng、zlib、NanoSVG、MinGW-w64 winpthreads / runtime、GCC Runtime Libraries 等が含まれます。これらの著作権表示・ライセンス条件（`wxWindows Library Licence, Version 3.1`、`GCC Runtime Library Exception v3.1` 等）は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) に記載しています。
 * バイナリ軽量化およびライセンス表記最小化のため、画像ハンドラは PNG（および標準 BMP）のみを有効化し、`libtiff` / `libjpeg` はリンクしていません。
 

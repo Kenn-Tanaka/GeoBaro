@@ -53,7 +53,7 @@ CLI_TARGET = test_cli.exe
 
 all: $(TARGET)
 
-$(RES_OBJ): $(RC_SRC) icons/GeoBaro.ico Makefile
+$(RES_OBJ): $(RC_SRC) icons/GeoBaro-v2.ico Makefile
 	windres -i $(RC_SRC) -o $(RES_OBJ) --include-dir=. -I$(WX_LIB_ROOT)/mswu -I$(WX_DIR)/include
 
 $(TARGET): $(GUI_SRCS) $(GUI_HDRS) $(RES_OBJ)

@@ -5,7 +5,7 @@
 
 // アプリケーションアイコン (wxWidgetsの標準およびWindowsエクスプローラー用)
 // wx/msw/wx.rc より前に定義することで、アプリ独自アイコンを優先させる
-1 ICON "icons/GeoBaro.ico"
-GeoBaro ICON "icons/GeoBaro.ico"
+1 ICON "icons/GeoBaro-v2.ico"
+GeoBaro ICON "icons/GeoBaro-v2.ico"
 
 #include "wx/msw/wx.rc"

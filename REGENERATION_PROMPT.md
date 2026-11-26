@@ -20,7 +20,7 @@
    - 通信ライブラリにはWindows標準の WinINet（wininet.lib）を使用し、libcurlやOpenSSLへの外部依存を排除すること（User-Agent: `GeoBaro/1.0`）。
    - リソースファイル（`.rc`）に `wx/msw/wx.rc`（`wxUSE_DPI_AWARE_MANIFEST=2`）等を組み込み、Common Controls v6（`LVS_EX_DOUBLEBUFFER`・テーマ描画）および PerMonitorV2 DPI Awareness マニフェストを埋め込むこと。
    - ライセンスおよび軽量画像コーデック制限（MIT互換性の維持）:
-     * 独自ソースコードおよび独自アセット（`icons/GeoBaro.ico` 等）は **MIT License** で配布可能な構成とし、依存ライブラリも MIT と両立する静的リンク可能ライセンス（wxWindows Library Licence v3.1 / zlib / libpng / NanoSVG / winpthreads / MinGW-w64 / GCC Runtime Library Exception v3.1 等）に限定すること。
+     * 独自ソースコードおよび独自アセット（`icons/GeoBaro-v2.ico` 等）は **MIT License** で配布可能な構成とし、依存ライブラリも MIT と両立する静的リンク可能ライセンス（wxWindows Library Licence v3.1 / zlib / libpng / NanoSVG / winpthreads / MinGW-w64 / GCC Runtime Library Exception v3.1 等）に限定すること。
      * 地図タイルは PNG（および標準 BMP）のみを使用するため、画像ハンドラ登録には `wxInitAllImageHandlers()` を使わず **`wxImage::AddHandler(new wxPNGHandler)`** のみを呼び出すこと。また `Makefile` 等のリンクフラグから `-lwxtiff` および `-lwxjpeg` を除外し、不要な TIFF / JPEG コーデック（IJG ライセンス表記要件を含む）をバイナリに組み込まないこと。
      * リポジトリルートに **`LICENSE`**（MIT License本文、汎用的な著作権表記）、**`THIRD_PARTY_NOTICES.md`**（静的リンクする wxWidgets・libpng・zlib・NanoSVG・winpthreads・MinGW-w64・GCC Runtime 等の正確な著作権表示・ライセンス全文、および外部データは MIT 対象外である旨）、**`README.md`**（外部データである国土地理院・気象庁コンテンツの利用規約および出典記載ルールを含む）、および **`.gitignore`**（`presets.dat`・`*.exe`・`*.o` 等の除外設定）を必ず生成・更新すること。
 4. 個人情報・ローカル環境パス保護: ソースコード、ドキュメント（`Makefile` の既定 `WX_DIR`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、`README.md` を含む）、生成EXE内に開発マシンの絶対パスやユーザ名などのプライベート情報を含めないこと。コンパイル時は `-fmacro-prefix-map=$(WX_DIR)=wxWidgets` 等を使用し、バイナリ内の `__FILE__` 展開文字列にもビルド環境のローカルディレクトリ名が残らないようにすること。
