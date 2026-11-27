@@ -38,6 +38,7 @@ enum {
     ID_MENU_COPY_PRESET_DISPLAY,
     ID_MENU_COPY_PRESET_ADDRESS,
     ID_HELP_CALCULATION,
+    ID_HELP_UNCERTAINTY,
     ID_HELP_SHORTCUT
 };
 
@@ -66,6 +67,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(ID_MENU_COPY_PRESET_ADDRESS, MainFrame::OnCopyPresetAddress)
     EVT_MENU(wxID_HELP, MainFrame::OnHelp)
     EVT_MENU(ID_HELP_CALCULATION, MainFrame::OnHelp)
+    EVT_MENU(ID_HELP_UNCERTAINTY, MainFrame::OnHelp)
     EVT_MENU(ID_HELP_SHORTCUT, MainFrame::OnHelp)
     EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
     EVT_CLOSE(MainFrame::OnClose)
@@ -210,6 +212,7 @@ void MainFrame::InitUi() {
     auto* help = new wxMenu();
     help->Append(wxID_HELP, wxT("使い方（F1）"));
     help->Append(ID_HELP_CALCULATION, wxT("計算の仕組み"));
+    help->Append(ID_HELP_UNCERTAINTY, wxT("気圧の不確かさ"));
     help->AppendSeparator();
     help->Append(wxID_ABOUT, wxT("バージョン情報"));
     auto* menuBar = new wxMenuBar();
@@ -432,6 +435,8 @@ void MainFrame::OnHelp(wxCommandEvent& event) {
 
     if (event.GetId() == ID_HELP_CALCULATION) {
         m_helpDialog->SelectTopic(HelpTopic::Calculation);
+    } else if (event.GetId() == ID_HELP_UNCERTAINTY) {
+        m_helpDialog->SelectTopic(HelpTopic::Uncertainty);
     } else if (event.GetId() == wxID_HELP || !m_helpDialog->IsShown()) {
         m_helpDialog->SelectTopic(HelpTopic::GettingStarted);
     }

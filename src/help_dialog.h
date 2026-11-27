@@ -11,7 +11,8 @@ enum class HelpTopic {
     MapAndPresets,
     Results,
     Calculation,
-    Troubleshooting
+    Troubleshooting,
+    Uncertainty
 };
 
 class HelpDialog : public wxDialog {
