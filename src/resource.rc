@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "version.h"
 
 // PerMonitorV2 DPI Awareness および Common Controls v6 マニフェストを有効化
 #define wxUSE_DPI_AWARE_MANIFEST 2
@@ -9,3 +10,31 @@
 GeoBaro ICON "icons/GeoBaro-v2.ico"
 
 #include "wx/msw/wx.rc"
+
+LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION GEOBARO_VERSION_PARTS
+    PRODUCTVERSION GEOBARO_VERSION_PARTS
+    FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+    FILEFLAGS 0
+    FILEOS VOS_NT_WINDOWS32
+    FILETYPE VFT_APP
+    FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041104B0"
+        BEGIN
+            VALUE "FileDescription", "GeoBaro - Elevation and Pressure Viewer"
+            VALUE "FileVersion", GEOBARO_VERSION_STRING
+            VALUE "OriginalFilename", "GeoBaro.exe"
+            VALUE "ProductName", "GeoBaro"
+            VALUE "ProductVersion", GEOBARO_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0411, 1200
+    END
+END

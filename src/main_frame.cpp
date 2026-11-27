@@ -1,4 +1,7 @@
 #include "main_frame.h"
+#include "help_dialog.h"
+#include "version.h"
+#include <wx/accel.h>
 #include <wx/filedlg.h>
 #include <wx/wfstream.h>
 #include <wx/stdpaths.h>
@@ -33,7 +36,9 @@ enum {
     ID_MENU_COPY_ROW,
     ID_MENU_COPY_TARGET_PRESS,
     ID_MENU_COPY_PRESET_DISPLAY,
-    ID_MENU_COPY_PRESET_ADDRESS
+    ID_MENU_COPY_PRESET_ADDRESS,
+    ID_HELP_CALCULATION,
+    ID_HELP_SHORTCUT
 };
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
@@ -59,6 +64,10 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(ID_MENU_COPY_TARGET_PRESS, MainFrame::OnCopySelectedTargetPressure)
     EVT_MENU(ID_MENU_COPY_PRESET_DISPLAY, MainFrame::OnCopyPresetDisplayText)
     EVT_MENU(ID_MENU_COPY_PRESET_ADDRESS, MainFrame::OnCopyPresetAddress)
+    EVT_MENU(wxID_HELP, MainFrame::OnHelp)
+    EVT_MENU(ID_HELP_CALCULATION, MainFrame::OnHelp)
+    EVT_MENU(ID_HELP_SHORTCUT, MainFrame::OnHelp)
+    EVT_MENU(wxID_ABOUT, MainFrame::OnAbout)
     EVT_CLOSE(MainFrame::OnClose)
 wxEND_EVENT_TABLE()
 
@@ -198,6 +207,18 @@ int MainFrame::FilterEvent(wxEvent& event) {
 }
 
 void MainFrame::InitUi() {
+    auto* help = new wxMenu();
+    help->Append(wxID_HELP, wxT("使い方（F1）"));
+    help->Append(ID_HELP_CALCULATION, wxT("計算の仕組み"));
+    help->AppendSeparator();
+    help->Append(wxID_ABOUT, wxT("バージョン情報"));
+    auto* menuBar = new wxMenuBar();
+    menuBar->Append(help, wxT("ヘルプ(&H)"));
+    SetMenuBar(menuBar);
+
+    const wxAcceleratorEntry shortcut(wxACCEL_NORMAL, WXK_F1, ID_HELP_SHORTCUT);
+    SetAcceleratorTable(wxAcceleratorTable(1, &shortcut));
+
     wxPanel* rootPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
 
@@ -403,6 +424,26 @@ void MainFrame::InitUi() {
 
     rootPanel->SetSizer(mainSizer);
     UpdateZoomControls();
+}
+
+void MainFrame::OnHelp(wxCommandEvent& event) {
+    if (m_isClosing.load()) return;
+    if (!m_helpDialog) m_helpDialog = new HelpDialog(this);
+
+    if (event.GetId() == ID_HELP_CALCULATION) {
+        m_helpDialog->SelectTopic(HelpTopic::Calculation);
+    } else if (event.GetId() == wxID_HELP || !m_helpDialog->IsShown()) {
+        m_helpDialog->SelectTopic(HelpTopic::GettingStarted);
+    }
+
+    m_helpDialog->Show();
+    m_helpDialog->Raise();
+    m_helpDialog->SetFocus();
+}
+
+void MainFrame::OnAbout(wxCommandEvent& WXUNUSED(event)) {
+    wxMessageBox(wxT("GeoBaro\nバージョン ") + wxString::FromUTF8(GEOBARO_VERSION_STRING),
+                 wxT("GeoBaro のバージョン情報"), wxOK | wxICON_INFORMATION, this);
 }
 
 std::string MainFrame::GetSelectedLayerCode() const {

@@ -361,5 +361,5 @@ This file is part of the mingw-w64 runtime package.
 ## 8. Windows OS System APIs & Original Assets
 
 - **Windows OS APIs (`WinINet`, `User32`, `GDI32`, `ComCtl32`, UCRT 等)**: Dynamically provided by the target Windows operating system via MinGW-w64 import libraries; OS DLLs are not bundled in the executable.
-- **Application Icons (`icons/GeoBaro-v2.ico` and `icons/GeoBaro.ico`)**: Project artwork distributed under the MIT License ([`LICENSE`](LICENSE)). The revised icon pairs a simplified silhouette of Japan with an aneroid barometer.
+- **Application Icon (`icons/GeoBaro-v2.ico`)**: Project artwork distributed under the MIT License ([`LICENSE`](LICENSE)). The icon pairs a simplified silhouette of Japan with an aneroid barometer.
 - **External Geographic and Meteorological Data**: Map tiles, address search results, elevation values, and atmospheric/weather observations fetched at runtime from the Geospatial Information Authority of Japan (国土地理院) and the Japan Meteorological Agency (気象庁) are NOT covered by the MIT License and remain subject to the respective providers' terms of use (see [`README.md`](README.md)).

@@ -19,6 +19,8 @@
 #include "map_panel.h"
 #include "preset_store.h"
 
+class HelpDialog;
+
 class MainFrame : public wxFrame, public wxEventFilter {
 public:
     MainFrame(const wxString& title);
@@ -96,6 +98,8 @@ private:
     };
 
     void InitUi();
+    void OnHelp(wxCommandEvent& event);
+    void OnAbout(wxCommandEvent& event);
     void OnSearch(wxCommandEvent& event);
     void OnLocationTextChanged(wxCommandEvent& event);
     void OnLayerChanged(wxCommandEvent& event);
@@ -173,6 +177,8 @@ private:
     void RememberFirstSearchInputs();
     void RestoreDisplayedInputs();
     void RefreshPresetChoice(int select_preset_index = -1);
+
+    HelpDialog* m_helpDialog = nullptr;
 
     // プリセットコントロール
     wxChoice* m_choicePreset;

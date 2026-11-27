@@ -2,6 +2,8 @@
 
 国土地理院の標高・住所・地図タイルデータと気象庁の過去気象観測データ（過去の気象データ検索）を連携させ、現在地の標高に応じた現地気圧換算および指定日の気象推移を表示するGUIアプリケーションです。
 
+バージョン番号は `年.月.日.連番` です。日付は日本標準時で、当日の初回リリースは連番を `1` とし、同日のリリースごとに増やします。番号は「ヘルプ」→「バージョン情報」、または `GeoBaro.exe` のプロパティの「詳細」で確認できます。リリース時の番号は `src/version.h` で管理します。
+
 ---
 
 ## 1. 主な機能と特徴
@@ -41,6 +43,9 @@
 7. **単一EXEポータブル配布（外部DLL不要）**
    * MinGW g++ 13.2.0 および wxWidgets 3.2.6 を**完全静的リンク（`-static`）**。
    * 通信にはWindows標準の `WinINet`（OS組み込み）を使用しているため、外部DLL（libcurl, OpenSSL, wxWidgets DLL等）を一切必要とせず、**`GeoBaro.exe` 単体で配布・即座に実行可能**です（Windows 10/11 UCRT環境）。
+
+8. **アプリ内ヘルプ**
+   * 「ヘルプ」メニューまたは `F1` で、使い方・結果の見方・計算の仕組みを参照できます。説明はEXEに内蔵され、オフラインでも読めます。ヘルプを開いたままメイン画面を操作でき、`Esc` で閉じられます。
 
 ---
 
@@ -91,14 +96,14 @@ test_cli.exe
 * `src/gsi_service.h` / `src/gsi_service.cpp`: 国土地理院 住所検索API・標高API・Webメルカトル座標変換・LRUキャッシュ付きタイル取得ロジック
 * `src/preset_store.h` / `src/preset_store.cpp`: 現在地プリセットのシリアライズ・管理ロジック
 * `src/resource.rc`: Windows アプリケーションアイコンおよび Common Controls v6 / PerMonitorV2 DPI Awareness マニフェスト定義
-* `icons/GeoBaro-v2.ico`: 日本列島とアネロイド気圧計の改訂版アイコン（16〜256 pxの7サイズ）。旧版は `icons/GeoBaro.ico` に収録。
+* `icons/GeoBaro-v2.ico`: 日本列島とアネロイド気圧計のアイコン（16〜256 pxの7サイズ）。
 * `src/jma_service.h` / `src/jma_service.cpp`: 気象庁過去データ検索HTMLパーサー・最寄り地点探索・周辺観測所バッチ取得・測高気圧換算
 * `src/spatial_pressure.h` / `src/spatial_pressure.cpp`: 複数観測所の空間補間（重み付き最小二乗平面近似・IDW・測高換算）による局所気圧算出モジュール
 * `src/jma_stations.h` / `src/jma_stations.cpp`: 全155地点の気象官署マスターテーブル
 * `jma_stations.json` / `generate_stations_cpp.py`: 気象官署マスターデータ（JSON）および `src/jma_stations.cpp` 再生成用スクリプト
 * `src/http_transport.h` / `src/http_transport.cpp`: WinINet によるHTTPS通信ラッパー（タイムアウト・HTTPステータス検証付き）
 * `Makefile`: MinGW g++ 用の静的リンクビルド構成（画像コーデックは PNG のみリンク、`-fmacro-prefix-map` 指定済み）
-* `.gitignore`: ユーザー設定ファイル（`presets.dat`）・ビルド成果物（`*.exe`, `*.o` 等）除外設定
+* `.gitignore`: ユーザー設定（`presets.dat`）、ビルド成果物、ローカルの退避用フォルダ（`_archive/`）をGit管理から除外。
 * `LICENSE`: 本ソフトウェアおよび独自アイコンの MIT ライセンス全文
 * `THIRD_PARTY_NOTICES.md`: 静的リンクしているサードパーティライブラリ・ランタイムのライセンス・著作権表示
 * `REGENERATION_PROMPT.md`: 将来のAPI変更時にエージェントへ同機能アプリを再生成させるためのプロンプト仕様書
@@ -109,7 +114,7 @@ test_cli.exe
 
 ### ソフトウェアおよびアイコンのライセンス（MIT License）
 
-* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/GeoBaro-v2.ico`、`icons/GeoBaro.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
+* 本ソフトウェアの独自ソースコードおよびアイコンファイル（`icons/GeoBaro-v2.ico`）は **MIT License** の下で提供されています（全文は [`LICENSE`](LICENSE) を参照してください）。
 * 静的リンクされた単一バイナリ（`GeoBaro.exe`）には wxWidgets、libpng、zlib、NanoSVG、MinGW-w64 winpthreads / runtime、GCC Runtime Libraries 等が含まれます。これらの著作権表示・ライセンス条件（`wxWindows Library Licence, Version 3.1`、`GCC Runtime Library Exception v3.1` 等）は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) に記載しています。
 * バイナリ軽量化およびライセンス表記最小化のため、画像ハンドラは PNG（および標準 BMP）のみを有効化し、`libtiff` / `libjpeg` はリンクしていません。
 

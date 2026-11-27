@@ -1,6 +1,9 @@
 # User preset data (contains user-registered locations)
 presets.dat
 
+# Local archive
+/_archive/
+
 # Compiled executables and build intermediates
 *.exe
 *.o
